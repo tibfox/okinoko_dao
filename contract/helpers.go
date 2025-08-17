@@ -1,11 +1,10 @@
-package main
+package contract
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"okinoko_dao/sdk"
 	"strconv"
 	"time"
 )
@@ -15,7 +14,7 @@ import (
 ////////////////////////////////////////////////////////////////////////////////
 
 func getSenderAddress() string {
-	return sdk.GetEnv().Sender.Address.String()
+	return envInterface.GetEnv().Sender.Address.String()
 }
 
 func projectKey(id string) string {
@@ -48,7 +47,7 @@ func generateGUID() string {
 
 func nowUnix() int64 {
 	// try chain timestamp via env key
-	if tsPtr := sdk.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
+	if tsPtr := envInterface.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
 		// try parse as integer seconds
 		if v, err := strconv.ParseInt(*tsPtr, 10, 64); err == nil {
 			return v
@@ -62,7 +61,7 @@ func nowUnix() int64 {
 }
 
 func getTxID() string {
-	if t := sdk.GetEnvKey("tx.id"); t != nil {
+	if t := envInterface.GetEnvKey("tx.id"); t != nil {
 		return *t
 	}
 	return ""
@@ -86,9 +85,12 @@ func FromJSON(data string, v interface{}) error {
 	return json.Unmarshal([]byte(data), v)
 }
 
-func returnJsonResponse(action string, success bool, data map[string]interface{}) string {
+func returnJsonResponse(action string, success bool, data map[string]interface{}) *string {
 	data["action"] = action
 	data["success"] = success
-	jsonString, _ := json.Marshal(data)
-	return string(jsonString)
+
+	jsonBytes, _ := json.Marshal(data)
+	jsonStr := string(jsonBytes)
+
+	return &jsonStr
 }

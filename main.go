@@ -3,13 +3,15 @@
 // created by tibfox 2025-08-12
 ////////////////////////////////////////////////////////////////////////////////
 
-//go:build debug
-// +build debug
-
 package main
 
-state :=NewMockState()
+import (
+	"okinoko_dao/contract"
+)
 
-func getState() State {
-	return state
+func main() {
+	debug := true
+	contract.InitState(debug)    // true = use MockState
+	contract.InitSKMocks(debug)  // enable mock env/sdk
+	contract.InitENVMocks(debug) // enable mock env/sdk
 }

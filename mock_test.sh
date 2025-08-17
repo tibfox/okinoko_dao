@@ -1,82 +1,45 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# Auto-generated mock test for build/main.wasm (Go WASM exports)
 
-# Mock test runner for Okinoko DAO (WASM contract)
-# Author: auto-generated for tibfox, 2025-08-15
-# Usage: ./mock_test.sh
+echo "Running "projects_create"..."
+wasmtime run --invoke projects_create build/main.wasm  "testitle" "testdesc" '{"testmeta": "test"}' '{"testcfg": "test"}' 1 "i64" '{"testasset": "test"}' 
 
-echo "=========================================="
-echo " Okinoko DAO Smart Contract Mock Test Run "
-echo "=========================================="
+echo "Running "projects_get_one"..."
+wasmtime build/main.wasm --invoke "projects_get_one"
 
-# 1. Build contract to wasm
-echo "[1] Building to wasm..."
-GOOS=wasip1 GOARCH=wasm go build -o okinoko_dao.wasm main.go
+echo "Running "projects_get_all"..."
+wasmtime build/main.wasm --invoke "projects_get_all"
 
-# 2. Choose runtime (wasmtime/wasmer). Default: wasmtime
-RUNTIME=${RUNTIME:-wasmtime}
+echo "Running "projects_add_funds"..."
+wasmtime build/main.wasm --invoke "projects_add_funds"
 
-if ! command -v "$RUNTIME" &>/dev/null; then
-  echo "Error: $RUNTIME not installed. Install wasmtime or set RUNTIME=wasmer."
-  exit 1
-fi
+echo "Running "projects_join"..."
+wasmtime build/main.wasm --invoke "projects_join"
 
-# 3. Define sample config as JSON
-CONFIG_JSON='{
-  "proposal_permission":"any_member",
-  "execute_permission":"any_member",
-  "voting_system":"stake_based",
-  "threshold_percent":60,
-  "quorum_percent":40,
-  "proposal_duration_secs":60,
-  "execution_delay_secs":10,
-  "leave_cooldown_secs":30,
-  "democratic_exact_amount":1,
-  "stake_min_amount":10,
-  "proposal_cost":1,
-  "enable_snapshot":true,
-  "reward_enabled":true,
-  "reward_amount":2,
-  "reward_payout_on_execute":true
-}'
+echo "Running "projects_leave"..."
+wasmtime build/main.wasm --invoke "projects_leave"
 
-# Helper to call contract functions
-call() {
-  local func="$1"; shift
-  echo
-  echo ">> $func $*"
-  case "$RUNTIME" in
-    wasmtime)
-      wasmtime run --invoke "$func" ./okinoko_dao.wasm -- "$@"
-      ;;
-    wasmer)
-      wasmer run ./okinoko_dao.wasm --invoke "$func" -- "$@"
-      ;;
-  esac
-}
+echo "Running "projects_transfer_ownership"..."
+wasmtime build/main.wasm --invoke "projects_transfer_ownership"
 
-# 4. Run mock scenario
-call projects_create "Okinoko Test" "Test project description" "{}" "$CONFIG_JSON" 100 "VSC"
-PROJECT_ID="mock_project_id_123" # TODO: parse return value properly
+echo "Running "projects_pause"..."
+wasmtime build/main.wasm --invoke "projects_pause"
 
-call projects_get_one "$PROJECT_ID"
+echo "Running "proposals_create"..."
+wasmtime build/main.wasm --invoke "proposals_create"
 
-call projects_join "$PROJECT_ID" 20 "VSC"
+echo "Running "proposals_vote"..."
+wasmtime build/main.wasm --invoke "proposals_vote"
 
-call proposals_create "$PROJECT_ID" "Test Proposal" "Just testing" "{}" "bool_vote" "[\"Yes\",\"No\"]" "" 0
-PROPOSAL_ID="mock_proposal_id_456"
+echo "Running "proposals_tally"..."
+wasmtime build/main.wasm --invoke "proposals_tally"
 
-call proposals_vote "$PROJECT_ID" "$PROPOSAL_ID" "[1]" "hash123"
+echo "Running "proposals_execute"..."
+wasmtime build/main.wasm --invoke "proposals_execute"
 
-call proposals_tally "$PROJECT_ID" "$PROPOSAL_ID"
+echo "Running "proposals_get_one"..."
+wasmtime build/main.wasm --invoke "proposals_get_one"
 
-call proposals_execute "$PROJECT_ID" "$PROPOSAL_ID" "VSC" || true
+echo "Running "proposals_get_all"..."
+wasmtime build/main.wasm --invoke "proposals_get_all"
 
-call projects_transfer_ownership "$PROJECT_ID" "newowner123"
-
-call projects_pause "$PROJECT_ID" true
-
-echo
-echo "=========================================="
-echo " Mock tests complete "
-echo "=========================================="

@@ -1,5 +1,4 @@
-// wasm_state.go
-package main
+package contract
 
 import "okinoko_dao/sdk"
 

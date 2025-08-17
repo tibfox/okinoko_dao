@@ -1,4 +1,4 @@
-package main
+package contract
 
 import (
 	"okinoko_dao/sdk"

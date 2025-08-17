@@ -1,9 +1,8 @@
-package main
+package contract
 
 import (
 	"encoding/json"
 	"okinoko_dao/sdk"
-	"strconv"
 	"strings"
 )
 
@@ -22,7 +21,7 @@ func CreateProposal(
 	optionsJSON string, // JSON array of strings, e.g. '["opt1","opt2"]'
 	receiver string,
 	amount int64,
-) string {
+) *string {
 	state := getState()
 	caller := getSenderAddress()
 
@@ -143,7 +142,7 @@ func CreateProposal(
 
 	saveProposal(state, prpsl)
 	addProposalToProjectIndex(state, projectID, id)
-	sdk.Log("CreateProposal: " + id + " in project " + projectID)
+	// sdk.Log("CreateProposal: " + id + " in project " + projectID)
 
 	return returnJsonResponse(
 		"proposals_create", true, map[string]interface{}{
@@ -159,7 +158,7 @@ func CreateProposal(
 // -----------------------------------------------------------------------------
 //
 //go:wasmexport proposals_vote
-func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash string) string {
+func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash string) *string {
 	state := getState()
 	caller := getSenderAddress()
 	now := nowUnix()
@@ -307,7 +306,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 	}
 
 	saveVote(state, &vote)
-	sdk.Log("VoteProposal: voter " + caller + " for " + proposalID)
+	// sdk.Log("VoteProposal: voter " + caller + " for " + proposalID)
 	return returnJsonResponse(
 		"proposals_vote", true, map[string]interface{}{
 			"vote": vote,
@@ -320,7 +319,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 // -----------------------------------------------------------------------------
 //
 //go:wasmexport proposals_tally
-func TallyProposal(projectID, proposalID string) string {
+func TallyProposal(projectID, proposalID string) *string {
 	state := getState()
 	prj, err := loadProject(state, projectID)
 	if err != nil {
@@ -388,7 +387,7 @@ func TallyProposal(projectID, proposalID string) string {
 		prpsl.State = StateFailed
 		prpsl.FinalizedAt = nowUnix()
 		saveProposal(state, prpsl)
-		sdk.Log("TallyProposal: quorum not reached")
+		// sdk.Log("TallyProposal: quorum not reached")
 		return returnJsonResponse(
 			"proposals_tally", false, map[string]interface{}{
 				"details": "quorum not reached",
@@ -433,7 +432,7 @@ func TallyProposal(projectID, proposalID string) string {
 
 	prpsl.FinalizedAt = nowUnix()
 	saveProposal(state, prpsl)
-	sdk.Log("TallyProposal: tallied - passed=" + strconv.FormatBool(prpsl.Passed))
+	// sdk.Log("TallyProposal: tallied - passed=" + strconv.FormatBool(prpsl.Passed))
 	return returnJsonResponse(
 		"proposals_tally", true, map[string]interface{}{
 			"passed":   prpsl.Passed,
@@ -449,7 +448,7 @@ func TallyProposal(projectID, proposalID string) string {
 // -----------------------------------------------------------------------------
 //
 //go:wasmexport proposals_execute
-func ExecuteProposal(projectID, proposalID, asset string) string {
+func ExecuteProposal(projectID, proposalID, asset string) *string {
 	state := getState()
 	caller := getSenderAddress()
 
@@ -544,7 +543,7 @@ func ExecuteProposal(projectID, proposalID, asset string) string {
 			sdk.HiveTransfer(sdk.Address(prpsl.Creator), prj.Config.RewardAmount, sdk.Asset(asset))
 			saveProject(state, prj)
 		}
-		sdk.Log("ExecuteProposal: transfer executed " + proposalID)
+		// sdk.Log("ExecuteProposal: transfer executed " + proposalID)
 		return returnJsonResponse(
 			"proposals_execute", true, map[string]interface{}{
 				"to":     prpsl.Receiver,
@@ -587,7 +586,7 @@ func ExecuteProposal(projectID, proposalID, asset string) string {
 				prpsl.FinalizedAt = nowUnix()
 				saveProject(state, prj)
 				saveProposal(state, prpsl)
-				sdk.Log("ExecuteProposal: updated threshold")
+				// sdk.Log("ExecuteProposal: updated threshold")
 				return returnJsonResponse(
 					"proposals_execute", true, map[string]interface{}{
 						"property": "update_threshold",
@@ -608,7 +607,7 @@ func ExecuteProposal(projectID, proposalID, asset string) string {
 			prpsl.FinalizedAt = nowUnix()
 			saveProject(state, prj)
 			saveProposal(state, prpsl)
-			sdk.Log("ExecuteProposal: toggled pause")
+			// sdk.Log("ExecuteProposal: toggled pause")
 			return returnJsonResponse(
 				"proposals_execute", true, map[string]interface{}{
 					"property": "toggle_pause",
@@ -630,7 +629,7 @@ func ExecuteProposal(projectID, proposalID, asset string) string {
 	prpsl.State = StateExecuted
 	prpsl.FinalizedAt = nowUnix()
 	saveProposal(state, prpsl)
-	sdk.Log("ExecuteProposal: marked executed without transfer " + proposalID)
+	// sdk.Log("ExecuteProposal: marked executed without transfer " + proposalID)
 	return returnJsonResponse(
 		"proposals_execute", true, map[string]interface{}{
 			"details": "executed without meta change or transfer",
@@ -643,7 +642,7 @@ func ExecuteProposal(projectID, proposalID, asset string) string {
 // -----------------------------------------------------------------------------
 //
 //go:wasmexport proposals_get_one
-func GetProposal(proposalID string) string {
+func GetProposal(proposalID string) *string {
 	state := getState()
 	prpsl, err := loadProposal(state, proposalID)
 	if err != nil {
@@ -665,7 +664,7 @@ func GetProposal(proposalID string) string {
 // -----------------------------------------------------------------------------
 //
 //go:wasmexport proposals_get_all
-func GetProjectProposals(projectID string) string {
+func GetProjectProposals(projectID string) *string {
 	state := getState()
 	ids := listProposalIDsForProject(state, projectID)
 	proposals := make([]Proposal, 0, len(ids))
