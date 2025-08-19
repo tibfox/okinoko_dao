@@ -97,6 +97,7 @@ func (pc *ProjectConfig) ToJSON() (string, error) {
 }
 func ProjectConfigFromJSON(data string) (*ProjectConfig, error) {
 	var pc ProjectConfig
+
 	if err := FromJSON(data, &pc); err != nil {
 		return nil, err
 	}
@@ -181,4 +182,36 @@ func VoteRecordFromJSON(data string) (*VoteRecord, error) {
 		return nil, err
 	}
 	return &vr, nil
+}
+
+// function arguments
+type CreateProjectArgs struct {
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	JsonMetadata  string `json:"metadata"`
+	ProjectConfig string `json:"configuration"`
+
+	Amount int64  `json:"amount"`
+	Asset  string `json:"asset"`
+}
+
+type JoinProjectArgs struct {
+	ProjectID string `json:"projectID"`
+	Amount    int64  `json:"amount"`
+	Asset     string `json:"asset"`
+}
+
+type AddFundsArgs struct {
+	ProjectID string `json:"projectID"`
+	Amount    int64  `json:"amount"`
+	Asset     string `json:"asset"`
+}
+
+type TransferOwnershipArgs struct {
+	ProjectID string `json:"projectID"`
+	NewOwner  string `json:"newOwner"`
+}
+
+type LeaveProjectArgs struct {
+	ProjectID string `json:"projectID"`
 }

@@ -94,3 +94,11 @@ func returnJsonResponse(action string, success bool, data map[string]interface{}
 
 	return &jsonStr
 }
+
+func ParseJSONFunctionArgs[T any](jsonStr string) (*T, error) {
+	var args T
+	if err := json.Unmarshal([]byte(jsonStr), &args); err != nil {
+		return nil, err
+	}
+	return &args, nil
+}
