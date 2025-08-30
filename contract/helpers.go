@@ -1,11 +1,13 @@
-package contract
+package main
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"okinoko_dao/sdk"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -13,16 +15,54 @@ import (
 // Helpers: keys, guids, time
 ////////////////////////////////////////////////////////////////////////////////
 
-func getSenderAddress() string {
-	return envInterface.GetEnv().Sender.Address.String()
+// New struct for transfer.allow args
+type TransferAllow struct {
+	Limit int64
+	Token sdk.Asset
+}
+
+// Helper function to validate token
+func isValidAsset(token string) bool {
+	for _, a := range validAssets {
+		if token == a {
+			return true
+		}
+	}
+	return false
+}
+
+var validAssets = []string{sdk.AssetHbd.String(), sdk.AssetHive.String()}
+
+// Helper function to get the first transfer.allow intent
+func getFirstTransferAllow(intents []sdk.Intent) *TransferAllow {
+	for _, intent := range intents {
+		if intent.Type == "transfer.allow" {
+			token := intent.Args["token"]
+			if !isValidAsset(token) {
+				abortCustom("invalid intent")
+			}
+			limitStr := intent.Args["limit"]
+			limit, err := strconv.ParseInt(limitStr, 10, 64)
+			if err != nil {
+				abortCustom("invalid intent")
+			}
+			ta := &TransferAllow{
+				Limit: limit,
+				Token: sdk.Asset(token),
+			}
+			return ta
+
+		}
+	}
+	return nil
+}
+
+func getSenderAddress() sdk.Address {
+	return sdk.GetEnv().Sender.Address
 }
 
 func projectKey(id string) string {
 	return "project:" + id
-}
-
-func projectProposalsIndexKey(projectID string) string {
-	return "project:" + projectID + ":proposals"
 }
 
 func proposalKey(id string) string {
@@ -32,8 +72,6 @@ func proposalKey(id string) string {
 func voteKey(projectID, proposalID, voter string) string {
 	return fmt.Sprintf("vote:%s:%s:%s", projectID, proposalID, voter)
 }
-
-const projectsIndexKey = "projects:index"
 
 // generateGUID returns a 16-byte hex string
 func generateGUID() string {
@@ -47,7 +85,7 @@ func generateGUID() string {
 
 func nowUnix() int64 {
 	// try chain timestamp via env key
-	if tsPtr := envInterface.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
+	if tsPtr := sdk.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
 		// try parse as integer seconds
 		if v, err := strconv.ParseInt(*tsPtr, 10, 64); err == nil {
 			return v
@@ -61,7 +99,7 @@ func nowUnix() int64 {
 }
 
 func getTxID() string {
-	if t := envInterface.GetEnvKey("tx.id"); t != nil {
+	if t := sdk.GetEnvKey("tx.id"); t != nil {
 		return *t
 	}
 	return ""
@@ -71,22 +109,25 @@ func getTxID() string {
 // Conversions from/to json strings
 ///////////////////////////////////////////////////
 
-// ToJSON converts any struct to a JSON string
-func ToJSON(v interface{}) (string, error) {
-	data, err := json.Marshal(v)
+func ToJSON[T any](v T) (string, error) {
+	b, err := json.Marshal(v)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return string(b), nil
 }
 
-// FromJSON parses a JSON string into the given struct pointer
-func FromJSON(data string, v interface{}) error {
-	return json.Unmarshal([]byte(data), v)
+func FromJSON[T any](data string) (*T, error) {
+	data = strings.TrimSpace(data)
+	var v T
+	if err := json.Unmarshal([]byte(data), &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
 }
 
-func returnJsonResponse(action string, success bool, data map[string]interface{}) *string {
-	data["action"] = action
+func returnJsonResponse(success bool, data map[string]interface{}) *string {
+
 	data["success"] = success
 
 	jsonBytes, _ := json.Marshal(data)
@@ -95,10 +136,12 @@ func returnJsonResponse(action string, success bool, data map[string]interface{}
 	return &jsonStr
 }
 
-func ParseJSONFunctionArgs[T any](jsonStr string) (*T, error) {
-	var args T
-	if err := json.Unmarshal([]byte(jsonStr), &args); err != nil {
-		return nil, err
+func abortOnError(err error, message string) {
+	if err != nil {
+		abortCustom(fmt.Sprintf("%s: %v", message, err))
 	}
-	return &args, nil
+}
+
+func abortCustom(abortMessage string) {
+	sdk.Abort(abortMessage)
 }

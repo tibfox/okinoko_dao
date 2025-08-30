@@ -1,7 +1,8 @@
-package contract
+package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"okinoko_dao/sdk"
 	"strings"
 )
@@ -11,6 +12,59 @@ import (
 // Exports only primitive params; slices come in as JSON strings
 // -----------------------------------------------------------------------------
 //
+
+// Proposal - stored separately at proposal:<id>
+type Proposal struct {
+	ID              string        `json:"id"`
+	ProjectID       string        `json:"project_id"`
+	Creator         string        `json:"creator"`
+	Name            string        `json:"name"`
+	Description     string        `json:"description"`
+	JsonMetadata    string        `json:"json_metadata"`
+	Type            VotingType    `json:"type"`
+	Options         []string      `json:"options"` // for polls
+	Receiver        string        `json:"receiver,omitempty"`
+	Amount          int64         `json:"amount,omitempty"`
+	CreatedAt       int64         `json:"created_at"`
+	DurationSeconds int64         `json:"duration_seconds"` // if 0 => use project default
+	State           ProposalState `json:"state"`
+	Passed          bool          `json:"passed"`
+	Executed        bool          `json:"executed"`
+	FinalizedAt     int64         `json:"finalized_at,omitempty"`
+	PassTimestamp   int64         `json:"pass_timestamp,omitempty"`
+	SnapshotTotal   int64         `json:"snapshot_total,omitempty"` // total voting power snapshot if enabled
+	TxID            string        `json:"tx_id,omitempty"`
+}
+
+// Proposal state lifecycle
+type ProposalState string
+
+const (
+	StateActive     ProposalState = "active"     // default state for new proposals
+	StateExecutable ProposalState = "executable" // quorum is reached - final
+	StateExecuted   ProposalState = "executed"   // proposal passed
+	StateFailed     ProposalState = "failed"     // proposal failed to gather enough votes within the proposal duration
+)
+
+// Proposal types
+type VotingType string
+
+const (
+	VotingTypeBoolVote     VotingType = "bool_vote"     // proposals with boolean vote - these can also execute transfers
+	VotingTypeSingleChoice VotingType = "single_choice" // proposals with only one answer as vote
+	VotingTypeMultiChoice  VotingType = "multi_choice"  // proposals with multiple possible answers as vote
+	VotingTypeMetaProposal VotingType = "meta"          // meta proposals to change project settings
+)
+
+type VoteRecord struct {
+	ProjectID   string `json:"project_id"`
+	ProposalID  string `json:"proposal_id"`
+	Voter       string `json:"voter"`
+	ChoiceIndex []int  `json:"choice_index"` // indexes for options; for yes/no -> [0] or [1]
+	Weight      int64  `json:"weight"`
+	VotedAt     int64  `json:"voted_at"`
+}
+
 //go:wasmexport proposals_create
 func CreateProposal(
 	projectID string,
@@ -22,20 +76,20 @@ func CreateProposal(
 	receiver string,
 	amount int64,
 ) *string {
-	state := getState()
+
 	caller := getSenderAddress()
 
-	prj, err := loadProject(state, projectID)
+	prj, err := loadProject(projectID)
 	if err != nil {
 		return returnJsonResponse(
-			"proposals_create", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project not found",
 			},
 		)
 	}
 	if prj.Paused {
 		return returnJsonResponse(
-			"proposals_create", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project is paused",
 			},
 		)
@@ -44,7 +98,7 @@ func CreateProposal(
 	// Permission check
 	if prj.Config.ProposalPermission == PermCreatorOnly && caller != prj.Owner {
 		return returnJsonResponse(
-			"proposals_create", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "only project owner can create proposals",
 			},
 		)
@@ -53,7 +107,7 @@ func CreateProposal(
 	if prj.Config.ProposalPermission == PermAnyMember {
 		if _, ok := prj.Members[caller]; !ok {
 			return returnJsonResponse(
-				"proposals_create", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "only members can create proposals",
 				},
 			)
@@ -67,7 +121,7 @@ func CreateProposal(
 	case VotingTypeBoolVote, VotingTypeSingleChoice, VotingTypeMultiChoice, VotingTypeMetaProposal:
 	default:
 		return returnJsonResponse(
-			"proposals_create", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "invalid voting type",
 			},
 		)
@@ -78,7 +132,7 @@ func CreateProposal(
 	if strings.TrimSpace(optionsJSON) != "" {
 		if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
 			return returnJsonResponse(
-				"proposals_create", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "invalid options json",
 				},
 			)
@@ -88,7 +142,7 @@ func CreateProposal(
 	// Options validation
 	if (vtype == VotingTypeSingleChoice || vtype == VotingTypeMultiChoice) && len(options) == 0 {
 		return returnJsonResponse(
-			"proposals_create", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "poll proposals require options",
 			},
 		)
@@ -98,7 +152,7 @@ func CreateProposal(
 	if prj.Config.ProposalCost > 0 {
 		sdk.HiveDraw(prj.Config.ProposalCost, sdk.Asset("VSC")) // NOTE: same placeholder as your original code
 		prj.Funds += prj.Config.ProposalCost
-		saveProject(state, prj)
+		saveProject(prj)
 	}
 
 	// Create proposal
@@ -140,12 +194,12 @@ func CreateProposal(
 		prpsl.SnapshotTotal = total
 	}
 
-	saveProposal(state, prpsl)
-	addProposalToProjectIndex(state, projectID, id)
+	saveProposal(prpsl)
+	AddIDToIndex(idxProjectProposal+projectID, id)
 	// sdk.Log("CreateProposal: " + id + " in project " + projectID)
 
 	return returnJsonResponse(
-		"proposals_create", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"id":       id,
 			"proposal": prpsl,
 		},
@@ -159,37 +213,37 @@ func CreateProposal(
 //
 //go:wasmexport proposals_vote
 func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash string) *string {
-	state := getState()
+
 	caller := getSenderAddress()
 	now := nowUnix()
 
-	prj, err := loadProject(state, projectID)
+	prj, err := loadProject(projectID)
 	if err != nil {
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project not found",
 			},
 		)
 	}
 	if prj.Paused {
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project is paused",
 			},
 		)
 	}
 
-	prpsl, err := loadProposal(state, proposalID)
+	prpsl, err := loadProposal(proposalID)
 	if err != nil {
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "proposal not found",
 			},
 		)
 	}
 	if prpsl.State != StateActive {
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "proposal is not active",
 			},
 		)
@@ -200,7 +254,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 		// finalize instead
 		_ = TallyProposal(projectID, proposalID) // ignore result here
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "voting period ended (tallied)",
 			},
 		)
@@ -210,7 +264,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 	member, ok := prj.Members[caller]
 	if !ok {
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "only members may vote",
 			},
 		)
@@ -222,7 +276,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 		weight = member.Stake
 		if weight <= 0 {
 			return returnJsonResponse(
-				"proposals_vote", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "member stake zero",
 				},
 			)
@@ -233,7 +287,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 	var choices []int
 	if err := json.Unmarshal([]byte(choicesJSON), &choices); err != nil {
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "invalid choice json",
 			},
 		)
@@ -244,7 +298,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 	case VotingTypeBoolVote:
 		if len(choices) != 1 || (choices[0] != 0 && choices[0] != 1) {
 			return returnJsonResponse(
-				"proposals_vote", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "bool_vote requires single choice 0 or 1",
 				},
 			)
@@ -253,7 +307,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 	case VotingTypeSingleChoice:
 		if len(choices) != 1 {
 			return returnJsonResponse(
-				"proposals_vote", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "single_choice requires exactly 1 index",
 				},
 			)
@@ -262,7 +316,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 		if choices[0] < 0 || choices[0] >= len(prpsl.Options) {
 
 			return returnJsonResponse(
-				"proposals_vote", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "option index out of range",
 				},
 			)
@@ -271,7 +325,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 	case VotingTypeMultiChoice:
 		if len(choices) == 0 {
 			return returnJsonResponse(
-				"proposals_vote", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "multi_choice requires >=1 choices",
 				},
 			)
@@ -279,7 +333,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 		for _, idx := range choices {
 			if idx < 0 || idx >= len(prpsl.Options) {
 				return returnJsonResponse(
-					"proposals_vote", false, map[string]interface{}{
+					false, map[string]interface{}{
 						"details": "option index out of range",
 					},
 				)
@@ -290,7 +344,7 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 		// no extra validation here
 	default:
 		return returnJsonResponse(
-			"proposals_vote", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "unknown proposal type",
 			},
 		)
@@ -305,10 +359,10 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 		VotedAt:     now,
 	}
 
-	saveVote(state, &vote)
+	saveVote(&vote)
 	// sdk.Log("VoteProposal: voter " + caller + " for " + proposalID)
 	return returnJsonResponse(
-		"proposals_vote", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"vote": vote,
 		},
 	)
@@ -320,19 +374,19 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 //
 //go:wasmexport proposals_tally
 func TallyProposal(projectID, proposalID string) *string {
-	state := getState()
-	prj, err := loadProject(state, projectID)
+
+	prj, err := loadProject(projectID)
 	if err != nil {
 		return returnJsonResponse(
-			"proposals_tally", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project not found",
 			},
 		)
 	}
-	prpsl, err := loadProposal(state, proposalID)
+	prpsl, err := loadProposal(proposalID)
 	if err != nil {
 		return returnJsonResponse(
-			"proposals_tally", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "proposal not found",
 			},
 		)
@@ -346,7 +400,7 @@ func TallyProposal(projectID, proposalID string) *string {
 	// Only tally if proposal duration has passed
 	if nowUnix() < prpsl.CreatedAt+duration {
 		return returnJsonResponse(
-			"proposals_tally", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "proposal duration not over yet",
 			},
 		)
@@ -366,7 +420,7 @@ func TallyProposal(projectID, proposalID string) *string {
 	}
 
 	// gather votes
-	votes := loadVotesForProposal(state, projectID, proposalID)
+	votes := loadVotesForProposal(projectID, proposalID)
 	// compute participation and option counts
 	var participation int64 = 0
 	optionCounts := make(map[int]int64)
@@ -386,10 +440,10 @@ func TallyProposal(projectID, proposalID string) *string {
 		prpsl.Passed = false
 		prpsl.State = StateFailed
 		prpsl.FinalizedAt = nowUnix()
-		saveProposal(state, prpsl)
+		saveProposal(prpsl)
 		// sdk.Log("TallyProposal: quorum not reached")
 		return returnJsonResponse(
-			"proposals_tally", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "quorum not reached",
 			},
 		)
@@ -431,10 +485,10 @@ func TallyProposal(projectID, proposalID string) *string {
 	}
 
 	prpsl.FinalizedAt = nowUnix()
-	saveProposal(state, prpsl)
+	saveProposal(prpsl)
 	// sdk.Log("TallyProposal: tallied - passed=" + strconv.FormatBool(prpsl.Passed))
 	return returnJsonResponse(
-		"proposals_tally", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"passed":   prpsl.Passed,
 			"proposal": prpsl,
 		},
@@ -449,35 +503,28 @@ func TallyProposal(projectID, proposalID string) *string {
 //
 //go:wasmexport proposals_execute
 func ExecuteProposal(projectID, proposalID, asset string) *string {
-	state := getState()
+
 	caller := getSenderAddress()
 
-	prj, err := loadProject(state, projectID)
-	if err != nil {
-		return returnJsonResponse(
-			"proposals_execute", false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+	prj := loadProject(projectID)
 	if prj.Paused {
 		return returnJsonResponse(
-			"proposals_execute", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project is paused",
 			},
 		)
 	}
-	prpsl, err := loadProposal(state, proposalID)
+	prpsl, err := loadProposal(proposalID)
 	if err != nil {
 		return returnJsonResponse(
-			"proposals_execute", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "proposal not found",
 			},
 		)
 	}
 	if prpsl.State != StateExecutable {
 		return returnJsonResponse(
-			"proposals_execute", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details":  "proposal not executable",
 				"proposal": prpsl,
 			},
@@ -487,7 +534,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 	// check execution delay
 	if prj.Config.ExecutionDelaySecs > 0 && nowUnix() < prpsl.PassTimestamp+prj.Config.ExecutionDelaySecs {
 		return returnJsonResponse(
-			"proposals_execute", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "execution delay not passed",
 				"delay":   prj.Config.ExecutionDelaySecs,
 				//TODO: add current elapsed time
@@ -497,7 +544,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 	// check permission to execute
 	if prj.Config.ExecutePermission == PermCreatorOnly && caller != prpsl.Creator {
 		return returnJsonResponse(
-			"proposals_execute", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "only creator can execute",
 				"creator": prpsl.Creator,
 			},
@@ -507,7 +554,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 	if prj.Config.ExecutePermission == PermAnyMember {
 		if _, ok := prj.Members[caller]; !ok {
 			return returnJsonResponse(
-				"proposals_execute", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "only members can execute",
 				},
 			)
@@ -519,7 +566,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 		// ensure funds
 		if prj.Funds < prpsl.Amount {
 			return returnJsonResponse(
-				"proposals_execute", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "insufficient project funds",
 					"funds":   prj.Funds,
 					"needed":  prpsl.Amount,
@@ -534,18 +581,18 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 		prpsl.Executed = true
 		prpsl.State = StateExecuted
 		prpsl.FinalizedAt = nowUnix()
-		saveProposal(state, prpsl)
-		saveProject(state, prj)
+		saveProposal(prpsl)
+		saveProject(prj)
 		// reward proposer if enabled
 		if prj.Config.RewardEnabled && prj.Config.RewardPayoutOnExecute && prj.Config.RewardAmount > 0 && prj.Funds >= prj.Config.RewardAmount {
 			prj.Funds -= prj.Config.RewardAmount
 			// transfer reward to proposer
 			sdk.HiveTransfer(sdk.Address(prpsl.Creator), prj.Config.RewardAmount, sdk.Asset(asset))
-			saveProject(state, prj)
+			saveProject(prj)
 		}
 		// sdk.Log("ExecuteProposal: transfer executed " + proposalID)
 		return returnJsonResponse(
-			"proposals_execute", true, map[string]interface{}{
+			true, map[string]interface{}{
 				"to":     prpsl.Receiver,
 				"amount": prpsl.Amount,
 				"asset":  asset,
@@ -559,7 +606,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 		var meta map[string]interface{}
 		if err := json.Unmarshal([]byte(prpsl.JsonMetadata), &meta); err != nil {
 			return returnJsonResponse(
-				"proposals_execute", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "invalid meta json",
 				},
 			)
@@ -573,7 +620,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 				newv := int(v)
 				if newv < 0 || newv > 100 {
 					return returnJsonResponse(
-						"proposals_execute", false, map[string]interface{}{
+						false, map[string]interface{}{
 							"property": "update_threshold",
 							"details":  "value out of range",
 						},
@@ -584,11 +631,11 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 				prpsl.Executed = true
 				prpsl.State = StateExecuted
 				prpsl.FinalizedAt = nowUnix()
-				saveProject(state, prj)
-				saveProposal(state, prpsl)
+				saveProject(prj)
+				saveProposal(prpsl)
 				// sdk.Log("ExecuteProposal: updated threshold")
 				return returnJsonResponse(
-					"proposals_execute", true, map[string]interface{}{
+					true, map[string]interface{}{
 						"property": "update_threshold",
 						"value":    newv,
 					},
@@ -605,11 +652,11 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 			prpsl.Executed = true
 			prpsl.State = StateExecuted
 			prpsl.FinalizedAt = nowUnix()
-			saveProject(state, prj)
-			saveProposal(state, prpsl)
+			saveProject(prj)
+			saveProposal(prpsl)
 			// sdk.Log("ExecuteProposal: toggled pause")
 			return returnJsonResponse(
-				"proposals_execute", true, map[string]interface{}{
+				true, map[string]interface{}{
 					"property": "toggle_pause",
 					"value":    prj.Paused,
 				},
@@ -617,7 +664,7 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 		// TODO: add more meta actions here (update quorum, proposal cost, reward setting, etc.)
 		default:
 			return returnJsonResponse(
-				"proposals_execute", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "meta property unknown",
 				},
 			)
@@ -628,10 +675,10 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 	prpsl.Executed = true
 	prpsl.State = StateExecuted
 	prpsl.FinalizedAt = nowUnix()
-	saveProposal(state, prpsl)
+	saveProposal(prpsl)
 	// sdk.Log("ExecuteProposal: marked executed without transfer " + proposalID)
 	return returnJsonResponse(
-		"proposals_execute", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"details": "executed without meta change or transfer",
 		},
 	)
@@ -643,8 +690,8 @@ func ExecuteProposal(projectID, proposalID, asset string) *string {
 //
 //go:wasmexport proposals_get_one
 func GetProposal(proposalID string) *string {
-	state := getState()
-	prpsl, err := loadProposal(state, proposalID)
+
+	prpsl, err := loadProposal(proposalID)
 	if err != nil {
 		return returnJsonResponse(
 			"proposals_get_one", false, map[string]interface{}{
@@ -665,11 +712,11 @@ func GetProposal(proposalID string) *string {
 //
 //go:wasmexport proposals_get_all
 func GetProjectProposals(projectID string) *string {
-	state := getState()
-	ids := listProposalIDsForProject(state, projectID)
+
+	ids := GetIDsFromIndex(idxProjectProposal + projectID)
 	proposals := make([]Proposal, 0, len(ids))
 	for _, id := range ids {
-		if prpsl, err := loadProposal(state, id); err == nil {
+		if prpsl, err := loadProposal(id); err == nil {
 			proposals = append(proposals, *prpsl)
 		}
 	}
@@ -678,4 +725,98 @@ func GetProjectProposals(projectID string) *string {
 			"propsal": proposals,
 		},
 	)
+}
+
+func saveProposal(prpsl *Proposal) {
+	key := proposalKey(prpsl.ID)
+	b, err := json.Marshal(prpsl)
+	abortOnError(err, "failed to marshal")
+	sdk.StateSetObject(key, string(b))
+}
+
+func loadProposal(id string) (*Proposal, error) {
+	key := proposalKey(id)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil {
+		return nil, fmt.Errorf("proposal %s not found", id)
+	}
+	var prpsl Proposal
+	if err := json.Unmarshal([]byte(*ptr), &prpsl); err != nil {
+		return nil, fmt.Errorf("failed unmarshal proposal %s: %v", id, err)
+	}
+	return &prpsl, nil
+}
+
+func saveVote(vote *VoteRecord) {
+	key := voteKey(vote.ProjectID, vote.ProposalID, vote.Voter)
+	b, _ := json.Marshal(vote)
+	sdk.StateSetObject(key, string(b))
+
+	// ensure voter listed in index for iteration (store list under project:proposal:voters)
+	votersKey := fmt.Sprintf("proposal:%s:%s:voters", vote.ProjectID, vote.ProposalID)
+	ptr := sdk.StateGetObject(votersKey)
+	var voters []string
+	if ptr != nil {
+		json.Unmarshal([]byte(*ptr), &voters)
+	}
+	seen := false
+	for _, a := range voters {
+		if a == vote.Voter {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		voters = append(voters, vote.Voter)
+		nb, _ := json.Marshal(voters)
+		sdk.StateSetObject(votersKey, string(nb))
+	}
+}
+
+func loadVotesForProposal(projectID, proposalID string) []VoteRecord {
+	votersKey := fmt.Sprintf("proposal:%s:%s:voters", projectID, proposalID)
+	ptr := sdk.StateGetObject(votersKey)
+	if ptr == nil {
+		return []VoteRecord{}
+	}
+	var voters []string
+	if err := json.Unmarshal([]byte(*ptr), &voters); err != nil {
+		return []VoteRecord{}
+	}
+	out := make([]VoteRecord, 0, len(voters))
+	for _, v := range voters {
+		vk := voteKey(projectID, proposalID, v)
+		vp := sdk.StateGetObject(vk)
+		if vp == nil {
+			continue
+		}
+		var vr VoteRecord
+		if err := json.Unmarshal([]byte(*vp), &vr); err == nil {
+			out = append(out, vr)
+		}
+	}
+	return out
+}
+
+// remove vote only needed if member leaves project while still voted on an active proposal
+func removeVote(projectID string, proposalID string, voter sdk.Address) {
+	key := voteKey(projectID, proposalID, voter.String())
+	sdk.StateDeleteObject(key)
+
+	// remove from voter list
+	votersKey := fmt.Sprintf("proposal:%s:%s:voters", projectID, proposalID)
+	ptr := sdk.StateGetObject(votersKey)
+	if ptr == nil {
+		return
+	}
+	var voters []string
+	json.Unmarshal([]byte(*ptr), &voters)
+	newV := make([]string, 0, len(voters))
+	for _, a := range voters {
+		if a != voter.String() {
+			newV = append(newV, a)
+		}
+	}
+	nb, _ := json.Marshal(newV)
+	sdk.StateSetObject(votersKey, string(nb))
 }

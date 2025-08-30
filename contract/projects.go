@@ -1,55 +1,137 @@
-package contract
+package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"okinoko_dao/sdk"
 	"strconv"
 )
 
-//go:wasmexport projects_create
-func CreateProject(payload string) *string {
-	args, err := ParseJSONFunctionArgs[CreateProjectArgs](payload)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_create", false, map[string]interface{}{
-				"details": "arguments do not match",
-			},
-		)
-	}
+// ProjectConfig contains toggles & params for a project
+type ProjectConfig struct {
+	ProposalPermission   Permission   `json:"propPerm"`       // who may create proposals
+	ExecutePermission    Permission   `json:"execPerm"`       // who may execute transfers
+	VotingSystem         VotingSystem `json:"v"`              // democratic or stake_based
+	ThresholdPercent     int          `json:"threshold"`      // percent required to pass (0-100)
+	QuorumPercent        int          `json:"quorum"`         // percent of voting power that must participate (0-100)
+	ProposalDurationSecs int64        `json:"propDur"`        // default duration
+	ExecutionDelaySecs   int64        `json:"execDelay"`      // delay after pass before exec allowed
+	LeaveCooldownSecs    int64        `json:"leaveCd"`        // cooldown for leaving/withdrawing
+	DemocraticExactAmt   int64        `json:"demAmount"`      // exact amount required to join democratic
+	StakeMinAmt          int64        `json:"stateMinAmount"` // min stake for stake-based joining
+	ProposalCost         int64        `json:"propCost"`       // fee for creating proposals (goes to project funds)
+	EnableSnapshot       bool         `json:"snapshot"`       // snapshot member stakes at proposal start
+	RewardEnabled        bool         `json:"reward"`         // rewards enabled
+	RewardAmount         int64        `json:"rewardAmount"`   // reward for proposer (from funds)
+}
 
-	if args.Amount <= 0 {
-		sdkInterface.Log("CreateProject: amount must be > 1")
+// Project - stored under project:<id>
+type Project struct {
+	ID           string                 `json:"id"`
+	Owner        sdk.Address            `json:"owner"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"desc"`
+	JsonMetadata map[string]string      `json:"meta,omitempty"`
+	Config       ProjectConfig          `json:"cfg"`
+	Members      map[sdk.Address]Member `json:"members,omitempty"` // key: address string
+	Funds        int64                  `json:"funds"`             // pool in minimal unit
+	FundsAsset   sdk.Asset              `json:"funds_asset"`
+	CreationTxID string                 `json:"txID"`
+	Paused       bool                   `json:"paused"`
+}
+
+// Member represents a project member
+type Member struct {
+	Address       sdk.Address `json:"a"`
+	Stake         int64       `json:"stake"`
+	Role          string      `json:"role"` // "admin" or "member"
+	JoinedTxID    string      `json:"txID"`
+	JoinedAt      int64       `json:"joined_at"` // unix ts
+	LastActionAt  int64       `json:"action_at"` // last stake/join/withdraw time (for cooldown)
+	ExitRequested int64       `json:"exit_req"`  // 0 if not requested
+	Reputation    int64       `json:"rep"`       // initially 0 | every vote += 1 | every passed proposal += 5
+}
+
+// Voting system for a project
+type VotingSystem string
+
+const (
+	SystemDemocratic VotingSystem = "dem"   // every member has an equal vote
+	SystemStake      VotingSystem = "stake" // ever member has a different vote weight - based on the stake in the project treasury fund
+)
+
+// Permission for who may create/execute proposals
+type Permission string
+
+const (
+	PermCreatorOnly Permission = "creator"
+	PermAnyMember   Permission = "member"
+	PermAnyone      Permission = "any"
+)
+
+// function arguments
+type CreateProjectArgs struct {
+	Name          string            `json:"name"`
+	Description   string            `json:"desc"`
+	JsonMetadata  map[string]string `json:"meta,omitempty"`
+	ProjectConfig string            `json:"cfg"`
+
+	Amount int64  `json:"amount"`
+	Asset  string `json:"asset"`
+}
+
+type JoinProjectArgs struct {
+	ProjectID string `json:"id"`
+}
+
+type AddFundsArgs struct {
+	ProjectID string `json:"id"`
+}
+
+type TransferOwnershipArgs struct {
+	ProjectID string      `json:"id"`
+	NewOwner  sdk.Address `json:"newOwner"`
+}
+
+type LeaveProjectArgs struct {
+	ProjectID string `json:"projectID"`
+}
+
+// Role constants
+const (
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+)
+
+//go:wasmexport projects_create
+func CreateProject(payload *string) *string {
+
+	input, err := FromJSON[CreateProjectArgs](*payload)
+	abortOnError(err, "invalid project args")
+
+	if input.Amount <= 0 {
+		sdk.Log("CreateProject: amount must be > 1")
 		return returnJsonResponse(
-			"projects_create", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "amount must be > 1",
 			},
 		)
-
 	}
 
 	// Parse JSON params
-	cfg, err := ProjectConfigFromJSON(args.ProjectConfig)
-	if err != nil {
+	cfg, err := FromJSON[ProjectConfig](input.ProjectConfig)
+	abortOnError(err, "invalid project config")
+	if input.Asset != sdk.AssetHive.String() && input.Asset != sdk.AssetHbd.String() {
 		return returnJsonResponse(
-			"projects_create", false, map[string]interface{}{
-				"details": "invalid project config\n" + err.Error(),
+			false, map[string]interface{}{
+				"details": input.Asset + " is an invalid asset",
 			},
 		)
 
 	}
-	if args.Asset != sdk.AssetHive.String() && args.Asset != sdk.AssetHbd.String() {
-		return returnJsonResponse(
-			"projects_create", false, map[string]interface{}{
-				"details": args.Asset + " is an invalid asset",
-			},
-		)
-
-	}
-
-	state := getState()
 	creator := getSenderAddress()
 
-	sdk.HiveDraw(args.Amount, sdk.Asset(args.Asset)) // TODO: first check balance of calle
+	sdk.HiveDraw(input.Amount, sdk.Asset(input.Asset)) // TODO: first check balance of calle
 
 	id := generateGUID()
 	now := nowUnix()
@@ -57,14 +139,14 @@ func CreateProject(payload string) *string {
 	prj := Project{
 		ID:           id,
 		Owner:        creator,
-		Name:         args.Name,
-		Description:  args.Description,
-		JsonMetadata: args.JsonMetadata,
+		Name:         input.Name,
+		Description:  input.Description,
+		JsonMetadata: input.JsonMetadata,
 		Config:       *cfg,
-		Members:      map[string]Member{},
-		Funds:        args.Amount,
-		FundsAsset:   sdk.Asset(args.Asset),
-		CreatedAt:    now,
+		Members:      map[sdk.Address]Member{},
+		Funds:        input.Amount,
+		FundsAsset:   sdk.Asset(input.Asset),
+		CreationTxID: getTxID(),
 		Paused:       false,
 	}
 
@@ -79,17 +161,17 @@ func CreateProject(payload string) *string {
 	}
 	// If it is stake-based, add full stake
 	if cfg.VotingSystem == SystemStake {
-		m.Stake = args.Amount
+		m.Stake = input.Amount
 	}
 	prj.Members[creator] = m
 
-	saveProject(state, &prj)
-	addProjectToIndex(state, id)
+	saveProject(&prj)
+	AddIDToIndex(idxProjects, id)
 
-	sdkInterface.Log("CreateProject: " + id)
+	sdk.Log("CreateProject: " + id)
 
 	return returnJsonResponse(
-		"projects_create", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"id": id,
 		},
 	)
@@ -100,17 +182,11 @@ func CreateProject(payload string) *string {
 //
 //go:wasmexport projects_get_one
 func GetProject(projectID string) *string {
-	state := getState()
-	prj, err := loadProject(state, projectID)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_get_one", false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+
+	prj := loadProject(projectID)
+
 	return returnJsonResponse(
-		"projects_get_one", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"project": prj,
 		},
 	)
@@ -120,16 +196,16 @@ func GetProject(projectID string) *string {
 //
 //go:wasmexport projects_get_all
 func GetAllProjects() *string {
-	state := getState()
-	ids := listAllProjectIDs(state)
+
+	ids := GetIDsFromIndex(idxProjects)
 	projects := make([]*Project, 0, len(ids))
 	for _, id := range ids {
-		if prj, err := loadProject(state, id); err == nil {
-			projects = append(projects, prj)
-		}
+		prj := loadProject(id)
+		projects = append(projects, prj)
+
 	}
 	return returnJsonResponse(
-		"projects_get_all", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"projects": projects,
 		},
 	)
@@ -138,109 +214,82 @@ func GetAllProjects() *string {
 // AddFunds - draw funds from caller and add to project's treasury pool
 // If the project is a stake based system & the sender is a valid mamber then the stake of the member will get updated accordingly.
 // hive assets are always handled x 1000 => 1 HIVE = 1000
+
+func validatetransferAllow(t *TransferAllow, projectAsset sdk.Asset) {
+	if t == nil {
+		abortCustom("invalid intent")
+	}
+	if t.Limit <= 0 {
+		abortCustom("limit needs to be > 0")
+	}
+	if t.Token != projectAsset {
+		abortCustom(fmt.Sprintf("only %s is allowed", projectAsset.String()))
+	}
+}
+
 //
 //go:wasmexport projects_add_funds
-func AddFunds(payload string) *string {
-	args, err := ParseJSONFunctionArgs[AddFundsArgs](payload)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_add_funds", false, map[string]interface{}{
-				"details": "arguments do not match",
-			},
-		)
-	}
-	state := getState()
-	if args.Amount <= 0 {
-		return returnJsonResponse(
-			"projects_add_funds", false, map[string]interface{}{
-				"projects": "amount needs to be > 0",
-			},
-		)
-	}
-	prj, err := loadProject(state, args.ProjectID)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_add_funds", false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
-	if args.Asset != prj.FundsAsset.String() {
-		return returnJsonResponse(
-			"projects_add_funds", false, map[string]interface{}{
-				"details": "asset needs to be " + prj.FundsAsset.String(),
-			},
-		)
-	}
-	caller := getSenderAddress()
+func AddFunds(payload *string) *string {
+	input, err := FromJSON[AddFundsArgs](*payload)
+	abortOnError(err, "invalid args")
+	prj := loadProject(input.ProjectID)
 
-	sdk.HiveDraw(args.Amount, sdk.Asset(args.Asset))
-	prj.Funds += args.Amount
+	ta := getFirstTransferAllow(sdk.GetEnv().Intents)
+	validatetransferAllow(ta, prj.FundsAsset)
+	sender := getSenderAddress()
+
+	sdk.HiveDraw(ta.Limit, ta.Token)
+	prj.Funds += ta.Limit
 
 	// if stake based
 	if prj.Config.VotingSystem == SystemStake {
 		// check if member
-		m, ismember := prj.Members[caller]
+		m, ismember := prj.Members[sender]
 		if ismember {
 			now := nowUnix()
-			m.Stake = m.Stake + args.Amount
+			m.Stake = m.Stake + ta.Limit
 			m.LastActionAt = now
 			// add member with exact stake
-			prj.Members[caller] = m
+			prj.Members[sender] = m
 		}
 	}
 
-	saveProject(state, prj)
-	sdkInterface.Log("AddFunds: added " + strconv.FormatInt(args.Amount, 10))
+	saveProject(prj)
 	return returnJsonResponse(
-		"projects_add_funds", true, map[string]interface{}{
-			"added": args.Amount,
+		true, map[string]interface{}{
+			"added": ta.Limit,
 			"asset": prj.FundsAsset.String(),
 		},
 	)
 }
 
 //go:wasmexport projects_join
-func JoinProject(payload string) *string {
-	args, err := ParseJSONFunctionArgs[JoinProjectArgs](payload)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_join", false, map[string]interface{}{
-				"details": "arguments do not match",
-			},
-		)
-	}
-	state := getState()
-	caller := getSenderAddress()
+func JoinProject(payload *string) *string {
+	input, err := FromJSON[JoinProjectArgs](*payload)
+	abortOnError(err, "invalid args")
 
-	prj, err := loadProject(state, args.ProjectID)
-	asset := sdk.Asset(args.Asset)
-
-	if err != nil {
-		return returnJsonResponse(
-			"projects_join", false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+	prj := loadProject(input.ProjectID)
 	if prj.Paused {
 		return returnJsonResponse(
-			"projects_join", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project is paused",
 			},
 		)
 	}
-	if args.Amount <= 0 {
+	ta := getFirstTransferAllow(sdk.GetEnv().Intents)
+	validatetransferAllow(ta, prj.FundsAsset)
+
+	if ta.Limit <= 0 {
 		return returnJsonResponse(
-			"projects_join", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "amount needs to be > 0",
 			},
 		)
 	}
-	if asset != prj.FundsAsset {
-		sdkInterface.Log(fmt.Sprintf("JoinProject: asset must match the project main asset: %s", prj.FundsAsset.String()))
+	if ta.Token != prj.FundsAsset {
+		sdk.Log(fmt.Sprintf("JoinProject: asset must match the project main asset: %s", prj.FundsAsset.String()))
 		return returnJsonResponse(
-			"projects_join", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "asset needs to be " + prj.FundsAsset.String(),
 			},
 		)
@@ -248,122 +297,107 @@ func JoinProject(payload string) *string {
 
 	now := nowUnix()
 	if prj.Config.VotingSystem == SystemDemocratic {
-		if args.Amount != prj.Config.DemocraticExactAmt {
-			sdkInterface.Log(fmt.Sprintf("JoinProject: democratic projects need an exact amount to join: %d %s", prj.Config.DemocraticExactAmt, prj.FundsAsset.String()))
-			return returnJsonResponse(
-				"projects_join", false, map[string]interface{}{
-					"details": fmt.Sprintf("democratic projects need an exact amount to join: %d %s", prj.Config.DemocraticExactAmt, prj.FundsAsset.String()),
-				},
-			)
+		if ta.Limit != prj.Config.DemocraticExactAmt {
+			abortCustom(fmt.Sprintf("democratic projects need an exact amount to join: %d %s", prj.Config.DemocraticExactAmt, prj.FundsAsset.String()))
 		}
 		// transfer funds into contract
-		sdk.HiveDraw(args.Amount, sdk.Asset(asset)) // TODO: what if not enough funds?!
+		sdk.HiveDraw(ta.Limit, ta.Token) // TODO: what if not enough funds?!
 
 		// add member with stake 1
-		prj.Members[caller] = Member{
-			Address:      caller,
+		sender := getSenderAddress()
+		prj.Members[sender] = Member{
+			Address:      sender,
 			Stake:        1,
 			Role:         RoleMember,
 			JoinedAt:     now,
 			LastActionAt: now,
 			Reputation:   0,
 		}
-		prj.Funds += args.Amount
+		prj.Funds += ta.Limit
 	} else { // if the project is a stake based system
-		if args.Amount < prj.Config.StakeMinAmt {
-			sdkInterface.Log(fmt.Sprintf("JoinProject: the sent amount < than the minimum projects entry fee: %d %s", prj.Config.StakeMinAmt, prj.FundsAsset.String()))
-
-			return returnJsonResponse(
-				"projects_join", false, map[string]interface{}{
-					"details": fmt.Sprintf("the sent amount < than the minimum projects entry fee: %d %s", prj.Config.StakeMinAmt, prj.FundsAsset.String()),
-				},
-			)
+		if ta.Limit < prj.Config.StakeMinAmt {
+			abortCustom(fmt.Sprintf("JoinProject: the sent amount < than the minimum projects entry fee: %d %s", prj.Config.StakeMinAmt, prj.FundsAsset.String()))
 		}
-		_, ok := prj.Members[caller]
+		sender := getSenderAddress()
+		_, ok := prj.Members[sender]
 		if ok {
-			sdkInterface.Log("JoinProject: already member")
-			return returnJsonResponse(
-				"projects_join", false, map[string]interface{}{
-					"details": "already member",
-				},
-			)
+			abortCustom("already member")
 		} else {
 			// transfer funds into contract
-			sdk.HiveDraw(args.Amount, sdk.Asset(asset)) // TODO: what if not enough funds?!
+			sdk.HiveDraw(ta.Limit, ta.Token)
 			// add member with exact stake
-			prj.Members[caller] = Member{
-				Address:      caller,
-				Stake:        args.Amount,
+			prj.Members[sender] = Member{
+				Address:      sender,
+				Stake:        ta.Limit,
 				Role:         RoleMember,
 				JoinedAt:     now,
 				LastActionAt: now,
 			}
 		}
-		prj.Funds += args.Amount
+		prj.Funds += ta.Limit
 	}
-	saveProject(state, prj)
-	sdkInterface.Log("JoinProject: " + args.ProjectID + " by " + caller)
+	saveProject(prj)
+
 	return returnJsonResponse(
-		"projects_join", true, map[string]interface{}{
-			"joined": caller,
+		true, map[string]interface{}{
+			"joined": getSenderAddress().String(),
 		},
 	)
 }
 
 //go:wasmexport projects_leave
-func LeaveProject(payload string) *string {
-	args, err := ParseJSONFunctionArgs[LeaveProjectArgs](payload)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_leave", false, map[string]interface{}{
-				"details": "arguments do not match",
-			},
-		)
-	}
-	state := getState()
+func LeaveProject(payload *string) *string {
+	input, err := FromJSON[LeaveProjectArgs](*payload)
+	abortOnError(err, "invalid args")
+
 	caller := getSenderAddress()
 
-	prj, err := loadProject(state, args.ProjectID)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_leave", false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+	prj := loadProject(input.ProjectID)
 	if prj.Paused {
-		sdkInterface.Log("LeaveProject: project paused")
+		sdk.Log("LeaveProject: project paused")
 		return returnJsonResponse(
-			"projects_leave", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project is paused",
 			},
 		)
 	}
 	if prj.Owner == caller {
-		sdkInterface.Log("LeaveProject: project owner can not leave")
+		sdk.Log("LeaveProject: project owner can not leave")
 		return returnJsonResponse(
-			"projects_leave", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "project owner can not leave the project",
 			},
 		)
 	}
 	member, ok := prj.Members[caller]
 	if !ok {
-		sdkInterface.Log("LeaveProject: not a member")
+		sdk.Log("LeaveProject: not a member")
 		return returnJsonResponse(
-			"projects_leave", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": caller + " is not a member",
 			},
 		)
 	}
 
 	now := nowUnix()
-	// if exit requested previously -> try to withdraw
-	if member.ExitRequested > 0 {
+
+	if member.ExitRequested == 0 {
+		// set exit requested timestamp
+		member.ExitRequested = now
+		prj.Members[caller] = member
+		saveProject(prj)
+		return returnJsonResponse(
+			true, map[string]interface{}{
+				"details": "exit requested.",
+				//TODO: add cooldown info
+			},
+		)
+	} else {
+		// if exit requested previously -> try to withdraw
 		if now-member.ExitRequested < prj.Config.LeaveCooldownSecs {
-			sdkInterface.Log("LeaveProject: cooldown not passed")
+			sdk.Log("LeaveProject: cooldown not passed")
 			return returnJsonResponse(
-				"projects_leave", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "cooldown of " + caller + " is not passed yet",
 					// TODO add remaining time
 				},
@@ -373,9 +407,9 @@ func LeaveProject(payload string) *string {
 		if prj.Config.VotingSystem == SystemDemocratic {
 			refund := prj.Config.DemocraticExactAmt
 			if prj.Funds < refund {
-				sdkInterface.Log("LeaveProject: insufficient project funds")
+				sdk.Log("LeaveProject: insufficient project funds")
 				return returnJsonResponse(
-					"projects_leave", false, map[string]interface{}{
+					false, map[string]interface{}{
 						"details": "insufficient project funds",
 					},
 				)
@@ -384,14 +418,15 @@ func LeaveProject(payload string) *string {
 			// transfer back to caller
 			sdk.HiveTransfer(sdk.Address(caller), refund, prj.FundsAsset)
 			delete(prj.Members, caller)
+			projectIds := GetIDsFromIndex(idxProjects)
 			// remove votes
-			for _, pid := range listProposalIDsForProject(state, args.ProjectID) {
-				removeVote(state, args.ProjectID, pid, caller) // TODO: should "deactivate" votes - not remove them
+			for _, pid := range projectIds {
+				removeVote(input.ProjectID, pid, caller) // TODO: should "deactivate" votes - not remove them
 			}
-			saveProject(state, prj)
-			sdkInterface.Log("LeaveProject: democratic refunded")
+			saveProject(prj)
+			sdk.Log("LeaveProject: democratic refunded")
 			return returnJsonResponse(
-				"projects_leave", true, map[string]interface{}{
+				true, map[string]interface{}{
 					"details": "democratic refunded",
 				},
 			)
@@ -399,7 +434,7 @@ func LeaveProject(payload string) *string {
 		// stake-based
 		withdraw := member.Stake
 		if withdraw <= 0 { // should never happen(?)
-			sdkInterface.Log("LeaveProject: nothing to withdraw")
+			sdk.Log("LeaveProject: nothing to withdraw")
 			// return returnJsonResponse(
 			// 	"projects_leave", true, map[string]interface{}{
 			// 		"details": "project left - nothing to withdraw",
@@ -407,9 +442,9 @@ func LeaveProject(payload string) *string {
 			// )
 		}
 		if prj.Funds < withdraw {
-			sdkInterface.Log("LeaveProject: insufficient project funds")
+			sdk.Log("LeaveProject: insufficient project funds")
 			return returnJsonResponse(
-				"projects_leave", false, map[string]interface{}{
+				false, map[string]interface{}{
 					"details": "insufficient project funds",
 				},
 			)
@@ -417,74 +452,53 @@ func LeaveProject(payload string) *string {
 		prj.Funds -= withdraw
 		sdk.HiveTransfer(sdk.Address(caller), withdraw, prj.FundsAsset)
 		delete(prj.Members, caller)
-		for _, pid := range listProposalIDsForProject(state, args.ProjectID) {
-			removeVote(state, args.ProjectID, pid, caller)
+		openProposalsIds := GetIDsFromIndex(idxProjectProposalsOpen + prj.ID)
+		for _, pid := range openProposalsIds {
+			removeVote(input.ProjectID, pid, caller)
 		}
-		saveProject(state, prj)
-		sdkInterface.Log("LeaveProject: withdrew stake")
+		saveProject(prj)
+		sdk.Log("LeaveProject: withdrew stake")
 		return returnJsonResponse(
-			"projects_leave", true, map[string]interface{}{
+			true, map[string]interface{}{
 				"details": "project left - stake refunded",
 			},
 		)
 	}
 
-	// otherwise set exit requested timestamp
-	member.ExitRequested = now
-	prj.Members[caller] = member
-	saveProject(state, prj)
-	return returnJsonResponse(
-		"projects_leave", true, map[string]interface{}{
-			"details": "exit requested.",
-			//TODO: add cooldown info
-		},
-	)
 }
 
 //go:wasmexport projects_transfer_ownership
-func TransferProjectOwnership(payload string) *string {
-	args, err := ParseJSONFunctionArgs[TransferOwnershipArgs](payload)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_transfer_ownership", false, map[string]interface{}{
-				"details": "arguments do not match",
-			},
-		)
-	}
-	state := getState()
-	caller := getSenderAddress()
+func TransferProjectOwnership(payload *string) *string {
+	input, err := FromJSON[TransferOwnershipArgs](*payload)
+	abortOnError(err, "invalid args")
 
-	prj, err := loadProject(state, args.ProjectID)
-	if err != nil {
+	sender := getSenderAddress()
+
+	prj := loadProject(input.ProjectID)
+
+	if sender != prj.Owner {
 		return returnJsonResponse(
-			"projects_transfer_ownership", false, map[string]interface{}{
-				"details": "project not found",
+			false, map[string]interface{}{
+				"details": sender + " is not owner of the project",
 			},
 		)
 	}
-	if caller != prj.Owner {
-		return returnJsonResponse(
-			"projects_transfer_ownership", false, map[string]interface{}{
-				"details": caller + " is not owner of the project",
-			},
-		)
-	}
-	prj.Owner = args.NewOwner
+	prj.Owner = input.NewOwner
 	// ensure new owner exists as member
-	if _, ok := prj.Members[args.NewOwner]; !ok {
-		prj.Members[args.NewOwner] = Member{
-			Address:      args.NewOwner,
+	if _, ok := prj.Members[input.NewOwner]; !ok {
+		prj.Members[input.NewOwner] = Member{
+			Address:      input.NewOwner,
 			Stake:        0,
 			Role:         RoleMember,
 			JoinedAt:     nowUnix(),
 			LastActionAt: nowUnix(),
 		}
 	}
-	saveProject(state, prj)
-	sdkInterface.Log("TransferProjectOwnership: " + args.ProjectID + " -> " + args.NewOwner)
+	saveProject(prj)
+
 	return returnJsonResponse(
-		"projects_transfer_ownership", true, map[string]interface{}{
-			"to": args.NewOwner,
+		true, map[string]interface{}{
+			"to": input.NewOwner,
 		},
 	)
 
@@ -492,31 +506,57 @@ func TransferProjectOwnership(payload string) *string {
 
 //go:wasmexport projects_pause
 func EmergencyPauseImmediate(projectID string, pause bool) *string {
-	state := getState()
+
 	caller := getSenderAddress()
-	prj, err := loadProject(state, projectID)
-	if err != nil {
-		return returnJsonResponse(
-			"projects_pause", false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+	prj := loadProject(projectID)
+
 	if caller != prj.Owner {
 		return returnJsonResponse(
-			"projects_pause", false, map[string]interface{}{
+			false, map[string]interface{}{
 				"details": "only the project owner can pause / unpause without dedicated meta proposal",
 			},
 		)
 
 	}
 	prj.Paused = pause
-	saveProject(state, prj)
-	sdkInterface.Log("EmergencyPauseImmediate: set paused=" + strconv.FormatBool(pause))
+	saveProject(prj)
+	sdk.Log("EmergencyPauseImmediate: set paused=" + strconv.FormatBool(pause))
 	return returnJsonResponse(
-		"projects_pause", true, map[string]interface{}{
+		true, map[string]interface{}{
 			"details": "pause switched",
 			"value":   pause,
 		},
 	)
+}
+
+func saveProject(pro *Project) {
+	key := projectKey(pro.ID)
+	b, err := json.Marshal(pro)
+	abortOnError(err, "failed to marshal")
+	sdk.StateSetObject(key, string(b))
+}
+
+func loadProject(id string) *Project {
+	key := projectKey(id)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil {
+		abortCustom("loading failed for project")
+	}
+	var pro Project
+	if err := json.Unmarshal([]byte(*ptr), &pro); err != nil {
+		abortCustom(fmt.Sprintf("failed unmarshal project %s: %v", id, err))
+	}
+	return &pro
+}
+
+func allProjectIDs() []string {
+	ptr := sdk.StateGetObject(idxProjects)
+	if ptr == nil {
+		return []string{}
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(*ptr), &ids); err != nil {
+		return []string{}
+	}
+	return ids
 }
