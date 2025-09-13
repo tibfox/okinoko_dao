@@ -7,6 +7,9 @@ import (
 	"strconv"
 )
 
+const prjCreationMinHIVE = 10
+const prjCreationMinHBD = 1
+
 // ProjectConfig contains toggles & params for a project
 type ProjectConfig struct {
 	ProposalPermission   Permission   `json:"propPerm"`       // who may create proposals
@@ -34,7 +37,7 @@ type Project struct {
 	JsonMetadata map[string]string      `json:"meta,omitempty"`
 	Config       ProjectConfig          `json:"cfg"`
 	Members      map[sdk.Address]Member `json:"members,omitempty"` // key: address string
-	Funds        int64                  `json:"funds"`             // pool in minimal unit
+	Funds        float64                `json:"funds"`             // pool in minimal unit
 	FundsAsset   sdk.Asset              `json:"funds_asset"`
 	CreationTxID string                 `json:"txID"`
 	Paused       bool                   `json:"paused"`
@@ -43,7 +46,7 @@ type Project struct {
 // Member represents a project member
 type Member struct {
 	Address       sdk.Address `json:"a"`
-	Stake         int64       `json:"stake"`
+	Stake         float64     `json:"stake"`
 	Role          string      `json:"role"` // "admin" or "member"
 	JoinedTxID    string      `json:"txID"`
 	JoinedAt      int64       `json:"joined_at"` // unix ts
@@ -75,9 +78,6 @@ type CreateProjectArgs struct {
 	Description   string            `json:"desc"`
 	JsonMetadata  map[string]string `json:"meta,omitempty"`
 	ProjectConfig string            `json:"cfg"`
-
-	Amount int64  `json:"amount"`
-	Asset  string `json:"asset"`
 }
 
 type JoinProjectArgs struct {
@@ -108,14 +108,16 @@ func CreateProject(payload *string) *string {
 
 	input, err := FromJSON[CreateProjectArgs](*payload)
 	abortOnError(err, "invalid project args")
-
-	if input.Amount <= 0 {
-		sdk.Log("CreateProject: amount must be > 1")
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "amount must be > 1",
-			},
-		)
+	env := sdk.GetEnv()
+	ta := getFirstTransferAllow(env.Intents)
+	if ta == nil {
+		sdk.Abort("no intents set")
+	}
+	if ta.Token == sdk.AssetHive && ta.Limit < prjCreationMinHIVE {
+		sdk.Abort(fmt.Sprintf("project stake must be at least %f HIVE", prjCreationMinHIVE))
+	}
+	if ta.Token == sdk.AssetHbd && ta.Limit < prjCreationMinHBD {
+		sdk.Abort(fmt.Sprintf("project stake must be at least %f HBD", prjCreationMinHBD))
 	}
 
 	// Parse JSON params
@@ -238,7 +240,8 @@ func AddFunds(payload *string) *string {
 	validatetransferAllow(ta, prj.FundsAsset)
 	sender := getSenderAddress()
 
-	sdk.HiveDraw(ta.Limit, ta.Token)
+	mTaLimit := int64(ta.Limit * 1000)
+	sdk.HiveDraw(mTaLimit, ta.Token)
 	prj.Funds += ta.Limit
 
 	// if stake based

@@ -17,9 +17,11 @@ import (
 
 // New struct for transfer.allow args
 type TransferAllow struct {
-	Limit int64
+	Limit float64
 	Token sdk.Asset
 }
+
+var validAssets = []string{sdk.AssetHbd.String(), sdk.AssetHive.String()}
 
 // Helper function to validate token
 func isValidAsset(token string) bool {
@@ -31,8 +33,6 @@ func isValidAsset(token string) bool {
 	return false
 }
 
-var validAssets = []string{sdk.AssetHbd.String(), sdk.AssetHive.String()}
-
 // Helper function to get the first transfer.allow intent
 func getFirstTransferAllow(intents []sdk.Intent) *TransferAllow {
 	for _, intent := range intents {
@@ -42,7 +42,7 @@ func getFirstTransferAllow(intents []sdk.Intent) *TransferAllow {
 				abortCustom("invalid intent")
 			}
 			limitStr := intent.Args["limit"]
-			limit, err := strconv.ParseInt(limitStr, 10, 64)
+			limit, err := strconv.ParseFloat(limitStr, 64)
 			if err != nil {
 				abortCustom("invalid intent")
 			}

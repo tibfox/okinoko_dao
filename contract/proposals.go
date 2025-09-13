@@ -15,25 +15,25 @@ import (
 
 // Proposal - stored separately at proposal:<id>
 type Proposal struct {
-	ID              string        `json:"id"`
-	ProjectID       string        `json:"project_id"`
-	Creator         string        `json:"creator"`
-	Name            string        `json:"name"`
-	Description     string        `json:"description"`
-	JsonMetadata    string        `json:"json_metadata"`
-	Type            VotingType    `json:"type"`
-	Options         []string      `json:"options"` // for polls
-	Receiver        string        `json:"receiver,omitempty"`
-	Amount          int64         `json:"amount,omitempty"`
-	CreatedAt       int64         `json:"created_at"`
-	DurationSeconds int64         `json:"duration_seconds"` // if 0 => use project default
-	State           ProposalState `json:"state"`
-	Passed          bool          `json:"passed"`
-	Executed        bool          `json:"executed"`
-	FinalizedAt     int64         `json:"finalized_at,omitempty"`
-	PassTimestamp   int64         `json:"pass_timestamp,omitempty"`
-	SnapshotTotal   int64         `json:"snapshot_total,omitempty"` // total voting power snapshot if enabled
-	TxID            string        `json:"tx_id,omitempty"`
+	ID              string            `json:"id"`
+	ProjectID       string            `json:"project_id"`
+	Creator         sdk.Address       `json:"creator"`
+	Name            string            `json:"name"`
+	Description     string            `json:"description"`
+	JsonMetadata    map[string]string `json:"meta,omitempty"`
+	Type            VotingType        `json:"type"`
+	Options         []string          `json:"options"` // for polls
+	Receiver        sdk.Address       `json:"receiver,omitempty"`
+	Amount          int64             `json:"amount,omitempty"`
+	CreatedAt       int64             `json:"created_at"`
+	DurationSeconds int64             `json:"duration_seconds"` // if 0 => use project default
+	State           ProposalState     `json:"state"`
+	Passed          bool              `json:"passed"`
+	Executed        bool              `json:"executed"`
+	FinalizedAt     int64             `json:"finalized_at,omitempty"`
+	PassTimestamp   int64             `json:"pass_timestamp,omitempty"`
+	SnapshotTotal   int64             `json:"snapshot_total,omitempty"` // total voting power snapshot if enabled
+	TxID            string            `json:"tx_id,omitempty"`
 }
 
 // Proposal state lifecycle
@@ -65,28 +65,24 @@ type VoteRecord struct {
 	VotedAt     int64  `json:"voted_at"`
 }
 
-//go:wasmexport proposals_create
-func CreateProposal(
-	projectID string,
-	name string,
-	description string,
-	jsonMetadata string,
-	vtypeStr string, // VotingType as string (e.g., "bool_vote", "single_choice", ...)
-	optionsJSON string, // JSON array of strings, e.g. '["opt1","opt2"]'
-	receiver string,
-	amount int64,
-) *string {
+type CreateProposalArgs struct {
+	ProjectID        string            `json:"prjId"`
+	Name             string            `json:"name"`
+	Description      string            `json:"desc"`
+	JsonMetadata     map[string]string `json:"meta,omitempty"`
+	VotingTypeString string            `json:"project_id"` // VotingType as string (e.g., "bool_vote", "single_choice", ...)
+	OptionsJSON      string            `json:"options"`    // JSON array of strings, e.g. '["opt1","opt2"]'
+	Receiver         sdk.Address       `json:"receiver"`
+	Amount           int64             `json:"amount"`
+}
 
+//go:wasmexport proposals_create
+func CreateProposal(payload *string) *string {
+	input, err := FromJSON[CreateProposalArgs](*payload)
+	abortOnError(err, "invalid args")
 	caller := getSenderAddress()
 
-	prj, err := loadProject(projectID)
-	if err != nil {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+	prj := loadProject(input.ProjectID)
 	if prj.Paused {
 		return returnJsonResponse(
 			false, map[string]interface{}{
@@ -95,68 +91,54 @@ func CreateProposal(
 		)
 	}
 
-	// Permission check
-	if prj.Config.ProposalPermission == PermCreatorOnly && caller != prj.Owner {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "only project owner can create proposals",
-			},
-		)
-
-	}
-	if prj.Config.ProposalPermission == PermAnyMember {
+	// permission checks
+	switch prj.Config.ProposalPermission {
+	case PermCreatorOnly:
+		if caller != prj.Owner {
+			abortCustom("only project owner can create proposals")
+		}
+	case PermAnyMember:
 		if _, ok := prj.Members[caller]; !ok {
-			return returnJsonResponse(
-				false, map[string]interface{}{
-					"details": "only members can create proposals",
-				},
-			)
-
+			abortCustom("only members can create proposals")
 		}
 	}
 
 	// Parse VotingType
-	vtype := VotingType(vtypeStr)
+	vtype := VotingType(input.VotingTypeString)
 	switch vtype {
 	case VotingTypeBoolVote, VotingTypeSingleChoice, VotingTypeMultiChoice, VotingTypeMetaProposal:
 	default:
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "invalid voting type",
-			},
-		)
+		abortCustom("invalid voting type")
 	}
 
 	// Parse options JSON (for polls)
 	var options []string
-	if strings.TrimSpace(optionsJSON) != "" {
-		if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
-			return returnJsonResponse(
-				false, map[string]interface{}{
-					"details": "invalid options json",
-				},
-			)
-
+	if strings.TrimSpace(input.OptionsJSON) != "" {
+		if err := json.Unmarshal([]byte(input.OptionsJSON), &options); err != nil {
+			abortCustom("invalid options json")
 		}
 	}
 	// Options validation
 	if (vtype == VotingTypeSingleChoice || vtype == VotingTypeMultiChoice) && len(options) == 0 {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "poll proposals require options",
-			},
-		)
+		abortCustom("poll proposals require options")
 	}
 
 	// Charge proposal cost (from caller to contract)
 	if prj.Config.ProposalCost > 0 {
-		sdk.HiveDraw(prj.Config.ProposalCost, sdk.Asset("VSC")) // NOTE: same placeholder as your original code
+		ta := getFirstTransferAllow(sdk.GetEnv().Intents)
+		if ta.Token != prj.FundsAsset {
+			abortCustom("intents token != project asset")
+		}
+		if ta.Limit < prj.Config.ProposalCost {
+			abortCustom("intents limit < proposal costs")
+		}
+		sdk.HiveDraw(prj.Config.ProposalCost, prj.FundsAsset)
 		prj.Funds += prj.Config.ProposalCost
 		saveProject(prj)
 	}
 
 	// Create proposal
-	id := generateGUID()
+	id := generateGUID() // TODO: make these int
 	now := nowUnix()
 	duration := prj.Config.ProposalDurationSecs
 	if duration <= 0 {
@@ -164,15 +146,15 @@ func CreateProposal(
 	}
 	prpsl := &Proposal{
 		ID:              id,
-		ProjectID:       projectID,
-		Creator:         caller,
-		Name:            name,
-		Description:     description,
-		JsonMetadata:    jsonMetadata,
+		ProjectID:       input.ProjectID,
+		Creator:         getSenderAddress(),
+		Name:            input.Name,
+		Description:     input.Description,
+		JsonMetadata:    input.JsonMetadata,
 		Type:            vtype,
 		Options:         options,
-		Receiver:        receiver,
-		Amount:          amount,
+		Receiver:        input.Receiver,
+		Amount:          input.Amount,
 		CreatedAt:       now,
 		DurationSeconds: duration,
 		State:           StateActive,
@@ -195,15 +177,9 @@ func CreateProposal(
 	}
 
 	saveProposal(prpsl)
-	AddIDToIndex(idxProjectProposal+projectID, id)
-	// sdk.Log("CreateProposal: " + id + " in project " + projectID)
+	AddIDToIndex(idxProjectProposalsOpen+input.ProjectID, id)
 
-	return returnJsonResponse(
-		true, map[string]interface{}{
-			"id":       id,
-			"proposal": prpsl,
-		},
-	)
+	return nil
 
 }
 
@@ -211,81 +187,57 @@ func CreateProposal(
 // Vote Proposal (choices as JSON array) -> returns {"success":true} or {"error":...}
 // -----------------------------------------------------------------------------
 //
-//go:wasmexport proposals_vote
-func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash string) *string {
 
-	caller := getSenderAddress()
+type VoteProposalArgs struct {
+	ProjectID  string   `json:"prjId"`
+	PrposalID  string   `json:"propId"`
+	choices    []string `json:"choices"`
+	commitHash string   `json:"commit"`
+}
+
+//go:wasmexport proposals_vote
+func VoteProposal(payload *string) *string {
+	input, err := FromJSON[VoteProposalArgs](*payload)
+	abortOnError(err, "invalid args")
 	now := nowUnix()
 
-	prj, err := loadProject(projectID)
-	if err != nil {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
+	prj := loadProject(input.ProjectID)
 	if prj.Paused {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "project is paused",
-			},
-		)
+		abortCustom("project is paused")
 	}
 
-	prpsl, err := loadProposal(proposalID)
-	if err != nil {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "proposal not found",
-			},
-		)
-	}
+	prpsl := loadProposal(input.PrposalID)
+
 	if prpsl.State != StateActive {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "proposal is not active",
-			},
-		)
+		abortCustom("proposal inactive")
 	}
 
 	// Time window
 	if prpsl.DurationSeconds > 0 && now > prpsl.CreatedAt+prpsl.DurationSeconds {
 		// finalize instead
-		_ = TallyProposal(projectID, proposalID) // ignore result here
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "voting period ended (tallied)",
-			},
-		)
+		_ = TallyProposal(prpsl.ID) // ignore result here
+		abortCustom("voting period ended (tallied)")
 	}
 
+	sender := getSenderAddress()
 	// Member check
-	member, ok := prj.Members[caller]
+	member, ok := prj.Members[sender]
 	if !ok {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "only members may vote",
-			},
-		)
+		abortCustom("only members may vote")
 	}
 
 	// Compute weight
 	weight := int64(1)
 	if prj.Config.VotingSystem == SystemStake {
 		weight = member.Stake
-		if weight <= 0 {
-			return returnJsonResponse(
-				false, map[string]interface{}{
-					"details": "member stake zero",
-				},
-			)
+		if weight <= 0 { // should never happen ut good to check
+			abortCustom("member stake zero")
 		}
 	}
 
 	// Parse choices
 	var choices []int
-	if err := json.Unmarshal([]byte(choicesJSON), &choices); err != nil {
+	if err := json.Unmarshal([]byte(input.choices), &choices); err != nil {
 		return returnJsonResponse(
 			false, map[string]interface{}{
 				"details": "invalid choice json",
@@ -373,24 +325,10 @@ func VoteProposal(projectID, proposalID string, choicesJSON string, commitHash s
 // -----------------------------------------------------------------------------
 //
 //go:wasmexport proposals_tally
-func TallyProposal(projectID, proposalID string) *string {
+func TallyProposal(proposalID string) *string {
 
-	prj, err := loadProject(projectID)
-	if err != nil {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "project not found",
-			},
-		)
-	}
-	prpsl, err := loadProposal(proposalID)
-	if err != nil {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "proposal not found",
-			},
-		)
-	}
+	prpsl := loadProposal(proposalID)
+	prj := loadProject(prpsl.ProjectID)
 
 	// Use proposal-specific duration if set, else project default
 	duration := prpsl.DurationSeconds
@@ -399,13 +337,8 @@ func TallyProposal(projectID, proposalID string) *string {
 	}
 	// Only tally if proposal duration has passed
 	if nowUnix() < prpsl.CreatedAt+duration {
-		return returnJsonResponse(
-			false, map[string]interface{}{
-				"details": "proposal duration not over yet",
-			},
-		)
+		abortCustom("proposal duration not over yet")
 	}
-
 	// compute total possible voting power
 	var totalPossible int64 = 0
 	if prj.Config.VotingSystem == SystemDemocratic {
@@ -734,17 +667,17 @@ func saveProposal(prpsl *Proposal) {
 	sdk.StateSetObject(key, string(b))
 }
 
-func loadProposal(id string) (*Proposal, error) {
+func loadProposal(id string) *Proposal {
 	key := proposalKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil {
-		return nil, fmt.Errorf("proposal %s not found", id)
+		abortCustom("proposal not found")
 	}
 	var prpsl Proposal
 	if err := json.Unmarshal([]byte(*ptr), &prpsl); err != nil {
-		return nil, fmt.Errorf("failed unmarshal proposal %s: %v", id, err)
+		abortCustom("failed to unmarshal proposal")
 	}
-	return &prpsl, nil
+	return &prpsl
 }
 
 func saveVote(vote *VoteRecord) {
