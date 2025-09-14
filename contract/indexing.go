@@ -11,11 +11,16 @@ import (
 
 // index key prefixes
 const (
-	maxChunkSize              = 5000                 // all indexes are split into chunks of X entries to avoid overflowing the max size of a key/value in the contract state
+	maxChunkSize              = 2500                 // all indexes are split into chunks of X entries to avoid overflowing the max size of a key/value in the contract state
 	idxProjects               = "proj:"              // 		// holds all projects
+	idxMembers                = "mem:proj:"          // + member		// holds all open projects a user is member of
 	idxProjectProposalsOpen   = "proj:props:open:"   // + projectId		// holds all open proposals for a given project
 	idxProjectProposalsClosed = "proj:props:closed:" // + projectId		// holds all closed proposals for a given project
 	idxProposalVotes          = "prop:v:"            // + proposalId		// holds all votes for a given proposal
+	VotesCount                = "count:v"            // 					// holds a int counter for votes (to create new ids)
+	ProposalsCount            = "count:props"        // 					// holds a int counter for proposals (to create new ids)
+	ProjectsCount             = "count:proj"         // 					// holds a int counter for projects (to create new ids)
+
 )
 
 // oss stores number of chunks for a base index
@@ -43,16 +48,16 @@ func setChunkCount(baseKey string, n int) {
 }
 
 // AddIDToIndex ensures id exists across all chunks (no duplicates).
-func AddIDToIndex(baseKey string, id string) {
+func AddIDToIndex(baseKey string, id int64) {
 	chunks := getChunkCount(baseKey)
 	// search existing chunks for duplicates or free space
 	for i := 0; i < chunks; i++ {
 		key := chunkKey(baseKey, i)
 		ptr := sdk.StateGetObject(key)
-		var ids []string
+		var ids []int64
 		if ptr != nil && *ptr != "" {
 			if err := json.Unmarshal([]byte(*ptr), &ids); err != nil {
-				abortCustom(fmt.Sprintf("unmarshal index %s: %w", key, err))
+				sdk.Abort(fmt.Sprintf("unmarshal index %s: %w", key, err))
 
 			}
 			// duplicate check
@@ -66,7 +71,7 @@ func AddIDToIndex(baseKey string, id string) {
 				ids = append(ids, id)
 				b, err := json.Marshal(ids)
 				if err != nil {
-					abortCustom(fmt.Sprintf("marshal index %s: %w", key, err))
+					sdk.Abort(fmt.Sprintf("marshal index %s: %w", key, err))
 				}
 				sdk.StateSetObject(key, string(b))
 				return
@@ -75,10 +80,10 @@ func AddIDToIndex(baseKey string, id string) {
 	}
 	// not found / no space -> create new chunk
 	key := chunkKey(baseKey, chunks)
-	ids := []string{id}
+	ids := []int64{id}
 	b, err := json.Marshal(ids)
 	if err != nil {
-		abortCustom(fmt.Sprintf("marshal index %s: %w", key, err))
+		sdk.Abort(fmt.Sprintf("marshal index %s: %w", key, err))
 	}
 	sdk.StateSetObject(key, string(b))
 	setChunkCount(baseKey, chunks+1)
@@ -86,7 +91,7 @@ func AddIDToIndex(baseKey string, id string) {
 }
 
 // RemoveIDFromIndex removes id from whichever chunk it’s in.
-func RemoveIDFromIndex(baseKey string, id string) {
+func RemoveIDFromIndex(baseKey string, id int64) {
 	chunks := getChunkCount(baseKey)
 	for i := 0; i < chunks; i++ {
 		key := chunkKey(baseKey, i)
@@ -94,9 +99,9 @@ func RemoveIDFromIndex(baseKey string, id string) {
 		if ptr == nil || *ptr == "" {
 			continue
 		}
-		var ids []string
+		var ids []int64
 		if err := json.Unmarshal([]byte(*ptr), &ids); err != nil {
-			abortCustom(fmt.Sprintf("unmarshal index %s: %w", key, err))
+			sdk.Abort(fmt.Sprintf("unmarshal index %s: %w", key, err))
 
 		}
 		newIds := ids[:0]
@@ -112,7 +117,7 @@ func RemoveIDFromIndex(baseKey string, id string) {
 			// save updated chunk
 			b, err := json.Marshal(newIds)
 			if err != nil {
-				abortCustom(fmt.Sprintf("marshal index %s: %w", key, err))
+				sdk.Abort(fmt.Sprintf("marshal index %s: %w", key, err))
 			}
 			sdk.StateSetObject(key, string(b))
 
@@ -122,8 +127,8 @@ func RemoveIDFromIndex(baseKey string, id string) {
 }
 
 // GetIDsFromIndex collects all IDs across all chunks.
-func GetIDsFromIndex(baseKey string) []string {
-	all := []string{}
+func GetIDsFromIndex(baseKey string) []int64 {
+	all := []int64{}
 	chunks := getChunkCount(baseKey)
 	for i := 0; i < chunks; i++ {
 		key := chunkKey(baseKey, i)
@@ -131,9 +136,9 @@ func GetIDsFromIndex(baseKey string) []string {
 		if ptr == nil || *ptr == "" {
 			continue
 		}
-		var ids []string
+		var ids []int64
 		if err := json.Unmarshal([]byte(*ptr), &ids); err != nil {
-			abortCustom(fmt.Sprintf("unmarshal index %s: %w", key, err))
+			sdk.Abort(fmt.Sprintf("unmarshal index %s: %w", key, err))
 			return nil // will not happen because of error
 		}
 		all = append(all, ids...)
@@ -142,7 +147,7 @@ func GetIDsFromIndex(baseKey string) []string {
 }
 
 // GetOneIDFromIndex checks all chunks for a specific id.
-func GetOneIDFromIndex(baseKey string, id string) (string, error) {
+func GetOneIDFromIndex(baseKey string, id int64) (*int64, error) {
 	chunks := getChunkCount(baseKey)
 	for i := 0; i < chunks; i++ {
 		key := chunkKey(baseKey, i)
@@ -150,25 +155,38 @@ func GetOneIDFromIndex(baseKey string, id string) (string, error) {
 		if ptr == nil || *ptr == "" {
 			continue
 		}
-		var ids []string
+		var ids []int64
 		if err := json.Unmarshal([]byte(*ptr), &ids); err != nil {
-			return "", fmt.Errorf("unmarshal index %s: %w", key, err)
+			return nil, fmt.Errorf("unmarshal index %s: %w", key, err)
 		}
 		for _, v := range ids {
 			if v == id {
-				return id, nil
+				return &id, nil
 			}
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 // updateBoolIndex ensures the objectId is in the correct boolean index chunk
-func updateBoolIndex(baseKey string, objectId string, targetBool bool) {
+func updateBoolIndex(baseKey string, objectId int64, targetBool bool) {
 	// remove from the opposite boolean index
 	oppositeKey := baseKey + strconv.FormatBool(!targetBool)
 	RemoveIDFromIndex(oppositeKey, objectId)
 	// add to the correct boolean index
 	correctKey := baseKey + strconv.FormatBool(targetBool)
 	AddIDToIndex(correctKey, objectId)
+}
+
+func getCount(key string) int64 {
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		return 0
+	}
+	n, _ := strconv.ParseInt(*ptr, 10, 64)
+	return n
+}
+
+func setCount(key string, n int64) {
+	sdk.StateSetObject(key, strconv.FormatInt(n, 10))
 }
