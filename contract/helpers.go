@@ -59,16 +59,12 @@ func getSenderAddress() sdk.Address {
 	return sdk.GetEnv().Sender.Address
 }
 
-func projectKey(id int64) string {
-	return "project:" + string(id)
+func projectKey(id uint64) string {
+	return "prj:" + UInt64ToString(id)
 }
 
-func proposalKey(id int64) string {
-	return "proposal:" + string(id)
-}
-
-func voteKey(proposalID int64, voteId int64) string {
-	return fmt.Sprintf("vote:%f:%f", proposalID, voteId)
+func proposalKey(id uint64) string {
+	return "prpsl:" + UInt64ToString(id)
 }
 
 func nowUnix() int64 {
@@ -84,13 +80,6 @@ func nowUnix() int64 {
 		}
 	}
 	return time.Now().Unix()
-}
-
-func getTxID() string {
-	if t := sdk.GetEnvKey("tx.id"); t != nil {
-		return *t
-	}
-	return ""
 }
 
 ///////////////////////////////////////////////////
@@ -117,3 +106,50 @@ func FromJSON[T any](data string, objectType string) *T {
 
 // Convenience helper
 func strptr(s string) *string { return &s }
+
+// COUNT stuff
+
+// index key prefixes
+const (
+	VotesCount     = "count:v"     // 					// holds a int counter for votes (to create new ids)
+	ProposalsCount = "count:props" // 					// holds a int counter for proposals (to create new ids)
+	ProjectsCount  = "count:proj"  // 					// holds a int counter for projects (to create new ids)
+
+)
+
+func getCount(key string) uint64 {
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		return 0
+	}
+	n, _ := strconv.ParseUint(*ptr, 10, 64)
+	return n
+}
+
+func setCount(key string, n uint64) {
+	sdk.StateSetObject(key, strconv.FormatUint(n, 10))
+}
+
+func StringToUInt64(ptr *string) uint64 {
+	if ptr == nil {
+		sdk.Abort("input is empty")
+	}
+	val, err := strconv.ParseUint(*ptr, 10, 64) // base 10, 64-bit
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("failed to parse '%s' to uint64: %w", *ptr, err))
+	}
+	return val
+}
+
+func UInt64ToString(val uint64) string {
+	return strconv.FormatUint(val, 10)
+}
+
+// UIntSliceToString converts a slice of ints to a comma-separated string
+func UIntSliceToString(nums []uint) string {
+	strNums := make([]string, len(nums))
+	for i, n := range nums {
+		strNums[i] = strconv.FormatUint(uint64(n), 10)
+	}
+	return strings.Join(strNums, ",")
+}
