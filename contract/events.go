@@ -38,10 +38,19 @@ func emitProposalCreatedEvent(proposalId uint64, memberAddress string) {
 	))
 }
 
-func emitProposalExecutedEvent(proposalId uint64) {
+func emitProposalStateChangedEvent(proposalId uint64, proposalState ProposalState) {
 	sdk.Log(fmt.Sprintf(
-		"ProposalExecuted|id:%d",
+		"ProposalState|id:%d|state:%s",
 		proposalId,
+		proposalState,
+	))
+}
+
+func emitProposalTalliedEvent(proposalId uint64, proposalState string) {
+	sdk.Log(fmt.Sprintf(
+		"ProposalTallied|id:%d|state:%s",
+		proposalId,
+		proposalState,
 	))
 }
 

@@ -26,7 +26,6 @@ func saveVote(id uint64, voter sdk.Address, choices []uint, weight float64) {
 		"weight":  weight,
 	}
 	sdk.StateSetObject(proposalVoteKey(id, voter), ToJSON(voteData, "vote"))
-	emitVoteCasted(id, voter.String(), choices, weight)
 }
 
 type VoteProposalArgs struct {
@@ -38,10 +37,11 @@ type VoteProposalArgs struct {
 func VoteProposal(payload *string) *string {
 	input := FromJSON[VoteProposalArgs](*payload, "VoteProposalArgs")
 	prpsl := loadProposal(input.ProposalId)
-	if prpsl.State != "active" {
+
+	if prpsl.State != ProposalActive {
 		sdk.Abort("proposal not active")
 	}
-	if time.Now().Unix() > prpsl.CreatedAt+prpsl.Duration {
+	if time.Now().Unix() > prpsl.CreatedAt+int64(prpsl.DurationHours)*3600 {
 		sdk.Abort("proposal expired")
 	}
 
@@ -54,16 +54,23 @@ func VoteProposal(payload *string) *string {
 	if hasVoted(input.ProposalId, voter) {
 		sdk.Abort("already voted")
 	}
+	// check if member joined after proposal
+	if prpsl.CreatedAt > member.JoinedAt {
+		sdk.Abort("proposal was created before joining the project")
+	}
 
 	weight := member.Stake
 
+	// check if all voted options are valid
 	for _, idx := range input.Choices {
-		if idx < uint(len(prpsl.Options)) {
-			prpsl.Options[idx].Votes += weight
+		if idx >= uint(len(prpsl.Options)) {
+			sdk.Abort("invalid option index")
 		}
+		prpsl.Options[idx].Votes += weight
 	}
 
 	saveVote(input.ProposalId, voter, input.Choices, weight)
 	saveProposal(prpsl)
+	emitVoteCasted(input.ProposalId, voter.String(), input.Choices, weight)
 	return strptr("voted")
 }

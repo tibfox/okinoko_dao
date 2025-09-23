@@ -12,23 +12,32 @@ import (
 // Proposal struct
 // -----------------------------------------------------------------------------
 type Proposal struct {
-	ID          uint64            `json:"id"`
-	ProjectID   uint64            `json:"project_id"`
-	Creator     sdk.Address       `json:"creator"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Options     []ProposalOption  `json:"options"`
-	Type        string            `json:"type"` // "fund" or "meta"
-	Receiver    sdk.Address       `json:"receiver,omitempty"`
-	Amount      float64           `json:"amount,omitempty"`
-	CreatedAt   int64             `json:"created_at"`
-	Duration    int64             `json:"duration"`
-	State       string            `json:"state"`
-	Passed      bool              `json:"passed"`
-	Executed    bool              `json:"executed"`
-	Meta        map[string]string `json:"meta,omitempty"`
-	Tx          string            `json:"tx"`
+	ID             uint64            `json:"id"`
+	ProjectID      uint64            `json:"project_id"`
+	Creator        sdk.Address       `json:"creator"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Options        []ProposalOption  `json:"options"`
+	Type           string            `json:"type"` // "fund" or "meta"
+	Receiver       sdk.Address       `json:"receiver,omitempty"`
+	Amount         float64           `json:"amount,omitempty"`
+	DurationHours  uint64            `json:"duration"`
+	CreatedAt      int64             `json:"created_at"`
+	State          ProposalState     `json:"state"`
+	Meta           map[string]string `json:"meta,omitempty"`
+	Tx             string            `json:"tx"`
+	StakeSnapshot  float64           `json:"snapshot"`
+	MemberSnapshot uint              `json:"memberSnapshot"`
 }
+
+type ProposalState string
+
+const (
+	ProposalActive   ProposalState = "active"
+	ProposalExecuted ProposalState = "executed"
+	ProposalPassed   ProposalState = "passed"
+	ProposalFailed   ProposalState = "failed"
+)
 
 type ProposalOption struct {
 	Text  string  `json:"text"`
@@ -39,14 +48,15 @@ type ProposalOption struct {
 // Create Proposal
 // -----------------------------------------------------------------------------
 type CreateProposalArgs struct {
-	ProjectID    uint64            `json:"project_id"`
-	Name         string            `json:"name"`
-	Description  string            `json:"description"`
-	OptionsJSON  string            `json:"options"`
-	Type         string            `json:"type"` // "fund" or "meta"
-	Receiver     sdk.Address       `json:"receiver"`
-	Amount       float64           `json:"amount"`
-	JsonMetadata map[string]string `json:"meta,omitempty"`
+	ProjectID        uint64            `json:"project_id"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description"`
+	OptionsJSON      string            `json:"options"`
+	Type             string            `json:"type"` // "fund" or "meta"
+	Receiver         sdk.Address       `json:"receiver"`
+	Amount           float64           `json:"amount"`
+	JsonMetadata     map[string]string `json:"meta,omitempty"`
+	ProposalDuration uint64            `json:"duration"`
 }
 
 //go:wasmexport proposal_create
@@ -79,35 +89,105 @@ func CreateProposal(payload *string) *string {
 	}
 
 	id := getCount(ProposalsCount)
+
+	var duration uint64
+	if input.ProposalDuration > 0 {
+		if input.ProposalDuration < prj.Config.ProposalDurationHours {
+			sdk.Abort("Duration must be higher or equal to project defined proposal duration")
+		}
+		duration = input.ProposalDuration
+	} else {
+		duration = prj.Config.ProposalDurationHours * 3600
+	}
+
 	now := time.Now().Unix()
-	duration := prj.Config.ProposalDurationSecs
-	if duration <= 0 {
-		duration = 7 * 24 * 3600 // default 1 week
+
+	// Count members
+	memberSnap := uint(len(prj.Members))
+
+	// Sum stakes
+	var stakeSnap float64
+	for _, m := range prj.Members {
+		stakeSnap += m.Stake
 	}
 
 	prpsl := &Proposal{
-		ID:          id,
-		ProjectID:   input.ProjectID,
-		Creator:     caller,
-		Name:        input.Name,
-		Description: input.Description,
-		Options:     opts,
-		Type:        input.Type,
-		Receiver:    input.Receiver,
-		Amount:      input.Amount,
-		CreatedAt:   now,
-		Duration:    duration,
-		State:       "active",
-		Passed:      false,
-		Executed:    false,
-		Meta:        input.JsonMetadata,
-		Tx:          *sdk.GetEnvKey("tx.id"),
+		ID:             id,
+		ProjectID:      input.ProjectID,
+		Creator:        caller,
+		Name:           input.Name,
+		Description:    input.Description,
+		Options:        opts,
+		Type:           input.Type,
+		Receiver:       input.Receiver,
+		Amount:         input.Amount,
+		CreatedAt:      now,
+		DurationHours:  duration,
+		State:          ProposalActive,
+		Meta:           input.JsonMetadata,
+		Tx:             *sdk.GetEnvKey("tx.id"),
+		MemberSnapshot: memberSnap,
+		StakeSnapshot:  stakeSnap,
 	}
 
 	saveProposal(prpsl)
 	setCount(ProposalsCount, id+1)
 	emitProposalCreatedEvent(id, caller.String())
+	emitProposalStateChangedEvent(id, ProposalActive)
 	return strptr(fmt.Sprintf("proposal %d created", id))
+}
+
+// -----------------------------------------------------------------------------
+// Tally
+// -----------------------------------------------------------------------------
+//
+//go:wasmexport proposal_tally
+func TallyProposal(proposalId *uint64) *string {
+	prpsl := loadProposal(*proposalId)
+	prj := loadProject(prpsl.ProjectID)
+
+	if prpsl.State != ProposalActive {
+		sdk.Abort("proposal not active")
+	}
+	if time.Now().Unix() < prpsl.CreatedAt+int64(prpsl.DurationHours)*3600 {
+		sdk.Abort("proposal still running")
+	}
+
+	// find best option
+	best := -1
+	var bestVal float64
+	var totalVotes float64
+	var voterCount uint64
+
+	for i, opt := range prpsl.Options {
+		totalVotes += opt.Votes
+		if opt.Votes > 0 {
+			voterCount++ // crude member count, adjust if multiple votes per member possible
+		}
+		if opt.Votes > bestVal {
+			bestVal = opt.Votes
+			best = i
+		}
+	}
+
+	// default to failed
+	prpsl.State = ProposalFailed
+
+	if best >= 0 && bestVal > 0 {
+		// Check quorum
+		quorumMet := voterCount >= prj.Config.Quorum // or prpsl.MemberSnapshot * quorumPercent, depending on design
+
+		// Check threshold (fraction of total stake at creation)
+		thresholdMet := (bestVal / prpsl.StakeSnapshot) >= prj.Config.ThresholdPercent
+
+		if quorumMet && thresholdMet {
+			prpsl.State = ProposalPassed
+		}
+	}
+
+	saveProposal(prpsl)
+	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
+	return strptr("tallied")
 }
 
 // -----------------------------------------------------------------------------
@@ -121,8 +201,9 @@ func ExecuteProposal(proposalID *uint64) *string {
 	if prj.Paused {
 		sdk.Abort("project is paused")
 	}
-	if prpsl.State != "executable" {
-		sdk.Abort("proposal not executable")
+	// TODO add abort if not talllied yet
+	if prpsl.State != ProposalPassed {
+		sdk.Abort("proposal not passed")
 	}
 
 	// fund transfer
@@ -143,7 +224,7 @@ func ExecuteProposal(proposalID *uint64) *string {
 		// todo: add more
 		case "update_threshold":
 			val := prpsl.Meta["value"]
-			var v int
+			var v float64
 			_ = json.Unmarshal([]byte(val), &v)
 			prj.Config.ThresholdPercent = v
 		case "toggle_pause":
@@ -152,47 +233,10 @@ func ExecuteProposal(proposalID *uint64) *string {
 		saveProject(prj)
 	}
 
-	prpsl.Executed = true
-	prpsl.State = "executed"
+	prpsl.State = ProposalExecuted
 	saveProposal(prpsl)
-	emitProposalExecutedEvent(prpsl.ID)
+	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	return strptr("executed")
-}
-
-// -----------------------------------------------------------------------------
-// Tally
-// -----------------------------------------------------------------------------
-//
-//go:wasmexport proposal_tally
-func TallyProposal(proposalId *uint64) *string {
-	prpsl := loadProposal(*proposalId)
-	if prpsl.State != "active" {
-		sdk.Abort("proposal not active")
-	}
-	if time.Now().Unix() < prpsl.CreatedAt+prpsl.Duration {
-		sdk.Abort("proposal still running")
-	}
-
-	// find best option
-	best := -1
-	var bestVal float64
-	for i, opt := range prpsl.Options {
-		if opt.Votes > bestVal {
-			bestVal = opt.Votes
-			best = i
-		}
-	}
-
-	if best >= 0 && bestVal > 0 {
-		prpsl.Passed = true
-		prpsl.State = "executable"
-	} else {
-		prpsl.Passed = false
-		prpsl.State = "failed"
-	}
-
-	saveProposal(prpsl)
-	return strptr("tallied")
 }
 
 // -----------------------------------------------------------------------------

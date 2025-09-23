@@ -6,18 +6,33 @@ import (
 	"time"
 )
 
+// CreateProjectArgs defines the JSON payload for creating a project
+type CreateProjectArgs struct {
+	Name          string            `json:"name"`
+	ProjectConfig ProjectConfig     `json:"config"` // JSON string representing ProjectConfig
+	JsonMetadata  map[string]string `json:"meta,omitempty"`
+}
+
 // ProjectConfig contains toggles & params for a project
 type ProjectConfig struct {
-	VotingSystem         VotingSystem `json:"votingSystem"`
-	ThresholdPercent     int          `json:"threshold"`
-	QuorumPercent        int          `json:"quorum"`
-	ProposalDurationSecs int64        `json:"proposalDuration"`
-	ExecutionDelaySecs   int64        `json:"executionDelay"`
-	LeaveCooldownSecs    int64        `json:"leaveCooldown"`
-	ProposalCost         float64      `json:"proposalCost"`
-	DemocraticExactAmt   float64      `json:"democraticAmount"`
-	StakeMinAmt          float64      `json:"stakeMinAmount"`
+	VotingSystem          VotingSystem `json:"votingSystem"`     // democratic or stake
+	ThresholdPercent      float64      `json:"threshold"`        // minimum percentage an answer needs to have to be valid
+	Quorum                uint64       `json:"quorum"`           // minimum count of votes in total for a proposal to get a valid result
+	ProposalDurationHours uint64       `json:"proposalDuration"` // duration for a proposal to run until tallyable
+	ExecutionDelayHours   uint64       `json:"executionDelay"`   // delay between tally and execution ofd a proposal
+	LeaveCooldownHours    uint64       `json:"leaveCooldown"`    // cooldown for a member to leave the project
+	ProposalCost          float64      `json:"proposalCost"`     // minimum transfer for creating a proposal (will go to funds)
+	DemocraticExactAmt    float64      `json:"democraticAmount"` // transfer for a membership in a democratic project
+	StakeMinAmt           float64      `json:"stakeMinAmount"`   // minimum transfer for a membership in a stake-based project
 }
+
+// Voting system & permission
+type VotingSystem string
+
+const (
+	SystemDemocratic VotingSystem = "democratic" // everyone has an equal stake and vote
+	SystemStake      VotingSystem = "stake"      // votes are weighted by stake of the meber
+)
 
 // Project - minimal required for proposals
 type Project struct {
@@ -42,27 +57,12 @@ type Member struct {
 	Reputation    int64       `json:"reputation"`
 }
 
-// Voting system & permission
-type VotingSystem string
-
-const (
-	SystemDemocratic VotingSystem = "democratic"
-	SystemStake      VotingSystem = "stake"
-)
-
 type Permission string
 
 const (
 	PermCreatorOnly Permission = "creator"
 	PermAnyMember   Permission = "member"
 )
-
-// CreateProjectArgs defines the JSON payload for creating a project
-type CreateProjectArgs struct {
-	Name          string            `json:"name"`
-	ProjectConfig ProjectConfig     `json:"config"` // JSON string representing ProjectConfig
-	JsonMetadata  map[string]string `json:"meta,omitempty"`
-}
 
 // -----------------------------------------------------------------------------
 // Project operations
@@ -213,7 +213,7 @@ func LeaveProject(projectID *uint64) *string {
 		saveProject(prj)
 		return strptr("exit requested")
 	}
-	if now-member.ExitRequested < prj.Config.LeaveCooldownSecs {
+	if now-member.ExitRequested < int64(prj.Config.LeaveCooldownHours*3600) {
 		sdk.Abort("cooldown not passed")
 	}
 
