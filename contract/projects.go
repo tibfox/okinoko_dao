@@ -17,12 +17,11 @@ type CreateProjectArgs struct {
 type ProjectConfig struct {
 	VotingSystem          VotingSystem `json:"votingSystem"`     // democratic or stake
 	ThresholdPercent      float64      `json:"threshold"`        // minimum percentage an answer needs to have to be valid
-	Quorum                uint64       `json:"quorum"`           // minimum count of votes in total for a proposal to get a valid result
+	QuorumPercent         float64      `json:"quorum"`           // minimum percentage of individual votes for a proposal to get a valid result
 	ProposalDurationHours uint64       `json:"proposalDuration"` // duration for a proposal to run until tallyable
 	ExecutionDelayHours   uint64       `json:"executionDelay"`   // delay between tally and execution ofd a proposal
 	LeaveCooldownHours    uint64       `json:"leaveCooldown"`    // cooldown for a member to leave the project
 	ProposalCost          float64      `json:"proposalCost"`     // minimum transfer for creating a proposal (will go to funds)
-	DemocraticExactAmt    float64      `json:"democraticAmount"` // transfer for a membership in a democratic project
 	StakeMinAmt           float64      `json:"stakeMinAmount"`   // minimum transfer for a membership in a stake-based project
 }
 
@@ -73,8 +72,6 @@ func CreateProject(payload *string) *string {
 	input := FromJSON[CreateProjectArgs](*payload, "CreateProjectArgs")
 
 	caller := getSenderAddress()
-	bal := sdk.GetBalance(caller, sdk.AssetHive)
-	sdk.Log(fmt.Sprintf("bal: %d", bal))
 
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow(sdk.GetEnv().Intents)
@@ -83,16 +80,19 @@ func CreateProject(payload *string) *string {
 	}
 
 	// determine required initial stake
-	var initialStake float64
-	if input.ProjectConfig.VotingSystem == SystemDemocratic {
-		initialStake = input.ProjectConfig.DemocraticExactAmt
-	} else {
-		initialStake = input.ProjectConfig.StakeMinAmt
+	var initialTrasurey float64
+	if input.ProjectConfig.VotingSystem == "" {
+		input.ProjectConfig.VotingSystem = SystemStake
 	}
 
-	// check that the transfer is enough
-	if ta.Limit < initialStake {
-		sdk.Abort(fmt.Sprintf("transfer limit %f < required initial stake %f", ta.Limit, initialStake))
+	if input.ProjectConfig.StakeMinAmt <= 0 {
+		input.ProjectConfig.StakeMinAmt = ta.Limit
+	} else {
+		if input.ProjectConfig.StakeMinAmt > ta.Limit {
+			sdk.Abort(fmt.Sprintf("transfer limit %f < StakeMinAmt %f", ta.Limit, input.ProjectConfig.StakeMinAmt))
+		} else {
+			initialTrasurey = ta.Limit - input.ProjectConfig.StakeMinAmt
+		}
 	}
 
 	// draw the funds
@@ -103,26 +103,40 @@ func CreateProject(payload *string) *string {
 	id := getCount(ProjectsCount)
 	now := time.Now().Unix()
 
+	if input.ProjectConfig.ThresholdPercent <= 0 {
+		input.ProjectConfig.ThresholdPercent = 50.001
+	}
+	if input.ProjectConfig.QuorumPercent <= 0 {
+		input.ProjectConfig.QuorumPercent = 50.001
+	}
+	if input.ProjectConfig.ProposalDurationHours <= 0 {
+		input.ProjectConfig.ProposalDurationHours = 24
+	}
+	if input.ProjectConfig.ExecutionDelayHours <= 0 {
+		input.ProjectConfig.ExecutionDelayHours = 4
+	}
+	if input.ProjectConfig.LeaveCooldownHours <= 0 {
+		input.ProjectConfig.LeaveCooldownHours = 24
+	}
+	if input.ProjectConfig.ProposalCost <= 0 {
+		input.ProjectConfig.ProposalCost = 1
+	}
+
 	prj := Project{
 		ID:         id,
 		Owner:      caller,
 		Name:       input.Name,
 		Config:     input.ProjectConfig,
-		Funds:      0,
+		Funds:      initialTrasurey,
 		FundsAsset: ta.Token,
 		Members:    map[sdk.Address]Member{},
 		Paused:     false,
 		Tx:         *sdk.GetEnvKey("tx.id"),
 	}
 
-	// add creator as member
-	creatorStake := 1.0
-	if input.ProjectConfig.VotingSystem == SystemStake {
-		creatorStake = ta.Limit
-	}
 	prj.Members[caller] = Member{
 		Address:      caller,
-		Stake:        creatorStake,
+		Stake:        ta.Limit - initialTrasurey,
 		JoinedAt:     now,
 		LastActionAt: now,
 		Reputation:   0,
@@ -132,7 +146,8 @@ func CreateProject(payload *string) *string {
 	setCount(ProjectsCount, id+1)
 
 	emitProjectCreatedEvent(id, caller.String())
-	emitFundsAdded(prj.ID, caller.String(), *ta, true)
+	emitFundsAdded(prj.ID, caller.String(), ta.Limit-initialTrasurey, ta.Token.String(), true)
+	emitFundsAdded(prj.ID, caller.String(), initialTrasurey, ta.Token.String(), false)
 	return strptr(fmt.Sprintf("project %d created", id))
 }
 
@@ -158,36 +173,22 @@ func JoinProject(projectID *uint64) *string {
 	mAmount := int64(ta.Limit * 1000)
 	sdk.HiveDraw(mAmount, ta.Token)
 
-	switch prj.Config.VotingSystem {
-	case SystemDemocratic:
-		if ta.Limit != prj.Config.DemocraticExactAmt {
-			sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.DemocraticExactAmt, ta.Token.String()))
-		}
-		prj.Members[caller] = Member{
-			Address:      caller,
-			Stake:        1,
-			JoinedAt:     now,
-			LastActionAt: now,
-			Reputation:   0,
-		}
-		prj.Funds += ta.Limit
-
-	case SystemStake:
-		if ta.Limit < prj.Config.StakeMinAmt {
-			sdk.Abort(fmt.Sprintf("stake too low, minimum %f required", prj.Config.StakeMinAmt))
-		}
-		prj.Members[caller] = Member{
-			Address:      caller,
-			Stake:        ta.Limit,
-			JoinedAt:     now,
-			LastActionAt: now,
-		}
-		prj.Funds += ta.Limit
+	if ta.Limit != prj.Config.StakeMinAmt && prj.Config.VotingSystem == SystemDemocratic {
+		sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
 	}
 
+	if ta.Limit < prj.Config.StakeMinAmt && prj.Config.VotingSystem == SystemStake {
+		sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
+	}
+	prj.Members[caller] = Member{
+		Address:      caller,
+		Stake:        ta.Limit,
+		JoinedAt:     now,
+		LastActionAt: now,
+	}
 	saveProject(prj)
 	emitJoinedEvent(prj.ID, caller.String())
-	emitFundsAdded(prj.ID, caller.String(), *ta, true)
+	emitFundsAdded(prj.ID, caller.String(), ta.Limit, ta.Token.String(), true)
 	return strptr("joined")
 }
 
@@ -217,16 +218,8 @@ func LeaveProject(projectID *uint64) *string {
 		sdk.Abort("cooldown not passed")
 	}
 
-	// refund stake or democratic amount
+	// refund stake
 	withdraw := member.Stake
-	if prj.Config.VotingSystem == SystemDemocratic {
-		withdraw = prj.Config.DemocraticExactAmt
-	}
-
-	if prj.Funds < withdraw {
-		sdk.Abort("insufficient funds")
-	}
-	prj.Funds -= withdraw
 	mAmount := int64(withdraw * 1000)
 	sdk.HiveTransfer(caller, mAmount, prj.FundsAsset)
 
@@ -266,26 +259,33 @@ func AddFunds(payload *string) *string {
 	sdk.HiveDraw(mAmount, ta.Token)
 
 	if input.ToStake {
-		// Only stake-based projects can add member funds
-		if prj.Config.VotingSystem != SystemStake {
-			sdk.Abort("cannot add member funds in democratic projects")
+		if prj.Config.VotingSystem == SystemDemocratic {
+			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
+		} else {
+			member := getMember(caller, prj.Members)
+			member.Stake += ta.Limit
+			member.LastActionAt = time.Now().Unix()
+			prj.Members[caller] = member
 		}
-		// update member stake
-		m, ok := prj.Members[caller]
-		if !ok {
-			sdk.Abort("caller is not a member")
-		}
-		m.Stake += ta.Limit
-		m.LastActionAt = time.Now().Unix()
-		prj.Members[caller] = m
+
 	} else {
 		// add to treasury for payouts
 		prj.Funds += ta.Limit
+
 	}
 
 	saveProject(prj)
-	emitFundsAdded(prj.ID, caller.String(), *ta, input.ToStake)
+	emitFundsAdded(prj.ID, caller.String(), ta.Limit, ta.Token.String(), input.ToStake)
 	return strptr("funds added")
+}
+
+func getMember(user sdk.Address, members map[sdk.Address]Member) Member {
+	// update member stake
+	m, ok := members[user]
+	if !ok {
+		sdk.Abort(fmt.Sprintf("%s is not a member", user.String()))
+	}
+	return m
 }
 
 // Transfer project ownership

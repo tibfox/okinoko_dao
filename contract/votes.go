@@ -30,7 +30,7 @@ func saveVote(id uint64, voter sdk.Address, choices []uint, weight float64) {
 
 type VoteProposalArgs struct {
 	ProposalId uint64 `json:"id"`
-	Choices    []uint `json:"choices"`
+	Choices    []uint `json:"choices"` // TODO: add test for -1 as option
 }
 
 //go:wasmexport proposals_vote
@@ -47,16 +47,18 @@ func VoteProposal(payload *string) *string {
 
 	prj := loadProject(prpsl.ProjectID)
 	voter := getSenderAddress()
-	member, ok := prj.Members[voter]
-	if !ok {
-		sdk.Abort("only members can vote")
-	}
+	member := getMember(voter, prj.Members)
 	if hasVoted(input.ProposalId, voter) {
 		sdk.Abort("already voted")
 	}
 	// check if member joined after proposal
 	if prpsl.CreatedAt > member.JoinedAt {
 		sdk.Abort("proposal was created before joining the project")
+	}
+
+	// check if stakemin is still the same (it can get modified by proposals)
+	if prj.Config.StakeMinAmt > member.Stake {
+		sdk.Abort("minimum stake has changed since membership - increase stake")
 	}
 
 	weight := member.Stake
@@ -66,7 +68,7 @@ func VoteProposal(payload *string) *string {
 		if idx >= uint(len(prpsl.Options)) {
 			sdk.Abort("invalid option index")
 		}
-		prpsl.Options[idx].Votes += weight
+		prpsl.Options[idx].Votes = append(prpsl.Options[idx].Votes, weight)
 	}
 
 	saveVote(input.ProposalId, voter, input.Choices, weight)

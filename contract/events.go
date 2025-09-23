@@ -54,6 +54,15 @@ func emitProposalTalliedEvent(proposalId uint64, proposalState string) {
 	))
 }
 
+func emitProposalResultEvent(projectId uint64, proposalId uint64, result string) {
+	sdk.Log(fmt.Sprintf(
+		"ProposalResult|projectId:%d|proposalId:%d|result:%s",
+		projectId,
+		proposalId,
+		result,
+	))
+}
+
 func emitVoteCasted(proposalId uint64, voter string, choices []uint, weight float64) {
 	sdk.Log(fmt.Sprintf(
 		"Vote|id:%d|by:%s|choices:%s|weight:%f",
@@ -64,13 +73,13 @@ func emitVoteCasted(proposalId uint64, voter string, choices []uint, weight floa
 	))
 }
 
-func emitFundsAdded(projectId uint64, addedByAddress string, ta TransferAllow, toStake bool) {
+func emitFundsAdded(projectId uint64, addedByAddress string, amount float64, asset string, toStake bool) {
 	sdk.Log(fmt.Sprintf(
 		"AddFunds|id:%d|by:%s|amount:%f|asset:%s|stake:%s",
 		projectId,
 		addedByAddress,
-		ta.Limit,
-		ta.Token.String(),
+		amount,
+		asset,
 		strconv.FormatBool(toStake),
 	))
 }
