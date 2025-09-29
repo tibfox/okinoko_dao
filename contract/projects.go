@@ -6,47 +6,62 @@ import (
 	"time"
 )
 
-// CreateProjectArgs defines the JSON payload for creating a project
+// CreateProjectArgs defines the JSON payload for creating a project.
+//
+// Fields:
+//   - Name: Name of the project. (TODO: enforce max length)
+//   - ProjectConfig: Configuration settings for the project.
+//   - Description: Description of the project. (TODO: enforce max length)
+//   - JsonMetadata: Optional metadata for extensibility. (TODO: enforce max size/length)
 type CreateProjectArgs struct {
-	Name          string            `json:"name"`
-	ProjectConfig ProjectConfig     `json:"config"` // JSON string representing ProjectConfig
-	JsonMetadata  map[string]string `json:"meta,omitempty"`
+	Name          string         `json:"name"`
+	ProjectConfig ProjectConfig  `json:"config"`
+	Description   string         `json:"desc"`
+	JsonMetadata  map[string]any `json:"jsonMeta,omitempty"`
 }
 
-// ProjectConfig contains toggles & params for a project
+// ProjectConfig contains the parameters and toggles that define project rules.
+//
+// Fields include thresholds for voting, quorum, cooldowns, and staking rules.
 type ProjectConfig struct {
-	VotingSystem          VotingSystem `json:"votingSystem"`     // democratic or stake
-	ThresholdPercent      float64      `json:"threshold"`        // minimum percentage an answer needs to have to be valid
-	QuorumPercent         float64      `json:"quorum"`           // minimum percentage of individual votes for a proposal to get a valid result
-	ProposalDurationHours uint64       `json:"proposalDuration"` // duration for a proposal to run until tallyable
-	ExecutionDelayHours   uint64       `json:"executionDelay"`   // delay between tally and execution ofd a proposal
-	LeaveCooldownHours    uint64       `json:"leaveCooldown"`    // cooldown for a member to leave the project
-	ProposalCost          float64      `json:"proposalCost"`     // minimum transfer for creating a proposal (will go to funds)
-	StakeMinAmt           float64      `json:"stakeMinAmount"`   // minimum transfer for a membership in a stake-based project
+	VotingSystem          VotingSystem `json:"votingSystem"`     // democratic or stake-based voting
+	ThresholdPercent      float64      `json:"threshold"`        // minimum % an answer needs to be valid
+	QuorumPercent         float64      `json:"quorum"`           // minimum % of votes required for a valid result
+	ProposalDurationHours uint64       `json:"proposalDuration"` // proposal lifetime until tally
+	ExecutionDelayHours   uint64       `json:"executionDelay"`   // delay between tally and execution
+	LeaveCooldownHours    uint64       `json:"leaveCooldown"`    // cooldown for member exits
+	ProposalCost          float64      `json:"proposalCost"`     // minimum transfer required to create a proposal
+	StakeMinAmt           float64      `json:"minStake"`         // minimum transfer for membership in stake-based projects
+	MembershipNFT         *uint64      `json:"memberNFT"`        // NFT required for membership (optional)
 }
 
-// Voting system & permission
+// VotingSystem defines how votes are weighted within a project.
 type VotingSystem string
 
 const (
-	SystemDemocratic VotingSystem = "democratic" // everyone has an equal stake and vote
-	SystemStake      VotingSystem = "stake"      // votes are weighted by stake of the meber
+	// SystemDemocratic assigns equal weight to all members.
+	SystemDemocratic VotingSystem = "democratic"
+
+	// SystemStake assigns vote weight based on the member's stake.
+	SystemStake VotingSystem = "stake"
 )
 
-// Project - minimal required for proposals
+// Project represents a DAO project with members, configuration, and funds.
 type Project struct {
-	ID         uint64                 `json:"id"`
-	Owner      sdk.Address            `json:"owner"`
-	Name       string                 `json:"name"`
-	Config     ProjectConfig          `json:"config"`
-	Funds      float64                `json:"funds"`
-	FundsAsset sdk.Asset              `json:"fundsAsset"`
-	Members    map[sdk.Address]Member `json:"members"`
-	Paused     bool                   `json:"paused"`
-	Tx         string                 `json:"tx"`
+	ID           uint64                 `json:"id"`
+	Owner        sdk.Address            `json:"owner"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"desc"`
+	Config       ProjectConfig          `json:"config"`
+	Funds        float64                `json:"funds"`
+	FundsAsset   sdk.Asset              `json:"fundsAsset"`
+	Members      map[sdk.Address]Member `json:"members"`
+	Paused       bool                   `json:"paused"`
+	Tx           string                 `json:"tx"`
+	JsonMetadata map[string]any         `json:"jsonMeta,omitempty"`
 }
 
-// Member represents a project member
+// Member represents a participant in a project, including stake and activity metadata.
 type Member struct {
 	Address       sdk.Address `json:"address"`
 	Stake         float64     `json:"stake"`
@@ -56,16 +71,22 @@ type Member struct {
 	Reputation    int64       `json:"reputation"`
 }
 
+// Permission defines access rights for actions within a project.
 type Permission string
 
 const (
+	// PermCreatorOnly restricts an action to the project creator/owner.
 	PermCreatorOnly Permission = "creator"
-	PermAnyMember   Permission = "member"
+
+	// PermAnyMember allows any project member to perform the action.
+	PermAnyMember Permission = "member"
 )
 
 // -----------------------------------------------------------------------------
 // Project operations
 // -----------------------------------------------------------------------------
+
+// CreateProject initializes and saves a new project.
 //
 //go:wasmexport project_create
 func CreateProject(payload *string) *string {
@@ -123,15 +144,17 @@ func CreateProject(payload *string) *string {
 	}
 
 	prj := Project{
-		ID:         id,
-		Owner:      caller,
-		Name:       input.Name,
-		Config:     input.ProjectConfig,
-		Funds:      initialTrasurey,
-		FundsAsset: ta.Token,
-		Members:    map[sdk.Address]Member{},
-		Paused:     false,
-		Tx:         *sdk.GetEnvKey("tx.id"),
+		ID:           id,
+		Owner:        caller,
+		Name:         input.Name,
+		Description:  input.Description,
+		Config:       input.ProjectConfig,
+		JsonMetadata: input.JsonMetadata,
+		Funds:        initialTrasurey,
+		FundsAsset:   ta.Token,
+		Members:      map[sdk.Address]Member{},
+		Paused:       false,
+		Tx:           *sdk.GetEnvKey("tx.id"),
 	}
 
 	prj.Members[caller] = Member{
@@ -151,7 +174,9 @@ func CreateProject(payload *string) *string {
 	return strptr(fmt.Sprintf("project %d created", id))
 }
 
-// Join project using the first valid transfer intent
+// JoinProject allows a caller to join an existing project
+// using the first valid transfer intent. Membership may require
+// an NFT depending on project configuration.
 //
 //go:wasmexport project_join
 func JoinProject(projectID *uint64) *string {
@@ -159,16 +184,33 @@ func JoinProject(projectID *uint64) *string {
 	if prj.Paused {
 		sdk.Abort("project paused")
 	}
-
 	caller := getSenderAddress()
-	now := time.Now().Unix()
 
+	if prj.Config.MembershipNFT != nil {
+		// check if caller is owner of any edition of the membership nft
+		// GetNFTOwnedEditionsArgs specifies the arguments to query editions owned by an address.
+		type GetNFTOwnedEditionsArgs struct {
+			NftID   uint64      `json:"id"` // NftID is the base NFT ID.
+			Address sdk.Address `json:"a"`  // Address is the owner address to check.
+		}
+
+		editionCallArguments := GetNFTOwnedEditionsArgs{
+			NftID:   *prj.Config.MembershipNFT,
+			Address: caller,
+		}
+
+		editions := sdk.ContractCall("TODO nftcontract", "nft_get_ownedEditions",
+			ToJSON(editionCallArguments, "nft contract call arguments"), nil)
+		if editions == nil || *editions == "[]" {
+			sdk.Abort("membership nft not owned")
+		}
+
+	}
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow(sdk.GetEnv().Intents)
 	if ta == nil {
 		sdk.Abort("no valid transfer intent provided")
 	}
-
 	// draw the funds
 	mAmount := int64(ta.Limit * 1000)
 	sdk.HiveDraw(mAmount, ta.Token)
@@ -180,6 +222,8 @@ func JoinProject(projectID *uint64) *string {
 	if ta.Limit < prj.Config.StakeMinAmt && prj.Config.VotingSystem == SystemStake {
 		sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
 	}
+	now := time.Now().Unix()
+
 	prj.Members[caller] = Member{
 		Address:      caller,
 		Stake:        ta.Limit,
@@ -192,7 +236,8 @@ func JoinProject(projectID *uint64) *string {
 	return strptr("joined")
 }
 
-// Leave project with cooldown
+// LeaveProject requests or completes leaving a project.
+// A cooldown period applies before stake is refunded.
 //
 //go:wasmexport project_leave
 func LeaveProject(projectID *uint64) *string {
@@ -230,12 +275,15 @@ func LeaveProject(projectID *uint64) *string {
 	return strptr("exit finished")
 }
 
+// AddFundsArgs defines the JSON payload for adding funds to a project.
 type AddFundsArgs struct {
 	ProjectId uint64 `json:"id"`
 	ToStake   bool   `json:"toStake"`
 }
 
-// AddFunds adds funds either to project treasury or to member stake
+// AddFunds transfers additional tokens to a project.
+// Depending on configuration, funds are either added to
+// the project treasury or the member's stake.
 //
 //go:wasmexport project_funds
 func AddFunds(payload *string) *string {
@@ -279,6 +327,8 @@ func AddFunds(payload *string) *string {
 	return strptr("funds added")
 }
 
+// getMember retrieves a member from the project's membership map.
+// Aborts if the given user is not a member.
 func getMember(user sdk.Address, members map[sdk.Address]Member) Member {
 	// update member stake
 	m, ok := members[user]
@@ -288,7 +338,8 @@ func getMember(user sdk.Address, members map[sdk.Address]Member) Member {
 	return m
 }
 
-// Transfer project ownership
+// TransferProjectOwnership changes project ownership to a new member.
+// The caller must be the current owner, and the new owner must be a member.
 //
 //go:wasmexport project_transfer
 func TransferProjectOwnership(projectID uint64, newOwner sdk.Address) {
@@ -306,7 +357,8 @@ func TransferProjectOwnership(projectID uint64, newOwner sdk.Address) {
 	saveProject(prj)
 }
 
-// Emergency pause/unpause
+// EmergencyPauseImmediate pauses or unpauses a project immediately.
+// Only the owner may invoke this action.
 //
 //go:wasmexport project_pause
 func EmergencyPauseImmediate(projectID uint64, pause bool) {
@@ -319,12 +371,14 @@ func EmergencyPauseImmediate(projectID uint64, pause bool) {
 	saveProject(prj)
 }
 
-// Save/load
+// saveProject persists the given project state in contract storage.
 func saveProject(prj *Project) {
 	key := projectKey(prj.ID)
 	sdk.StateSetObject(key, ToJSON(prj, "project"))
 }
 
+// loadProject retrieves a project from contract storage by ID.
+// Aborts if the project does not exist.
 func loadProject(id uint64) *Project {
 	key := projectKey(id)
 	ptr := sdk.StateGetObject(key)
