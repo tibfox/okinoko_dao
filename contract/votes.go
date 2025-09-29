@@ -9,16 +9,22 @@ import (
 // Voting
 // -----------------------------------------------------------------------------
 
+// proposalVoteKey generates a unique storage key for a vote
+// based on the proposal ID and the voter's address.
 func proposalVoteKey(id uint64, voter sdk.Address) string {
 	return "v:" + UInt64ToString(id) + ":" + voter.String()
 }
 
+// hasVoted checks whether a voter has already cast a vote
+// for a given proposal.
 func hasVoted(id uint64, voter sdk.Address) bool {
 	key := proposalVoteKey(id, voter)
 	ptr := sdk.StateGetObject(key)
 	return ptr != nil && *ptr != ""
 }
 
+// saveVote persists a voter's choices and voting weight
+// for a specific proposal.
 func saveVote(id uint64, voter sdk.Address, choices []uint, weight float64) {
 	// save vote
 	voteData := map[string]interface{}{
@@ -28,11 +34,19 @@ func saveVote(id uint64, voter sdk.Address, choices []uint, weight float64) {
 	sdk.StateSetObject(proposalVoteKey(id, voter), ToJSON(voteData, "vote"))
 }
 
+// VoteProposalArgs defines the JSON payload required to cast a vote.
+//
+// Fields:
+//   - ProposalId: The ID of the proposal being voted on.
+//   - Choices: A slice of option indices being voted for.
 type VoteProposalArgs struct {
 	ProposalId uint64 `json:"id"`
 	Choices    []uint `json:"choices"` // TODO: add test for -1 as option
 }
 
+// VoteProposal allows a member of a project to cast a vote on an active proposal.
+// Validates membership, proposal state, stake, and choice indices before recording the vote.
+//
 //go:wasmexport proposals_vote
 func VoteProposal(payload *string) *string {
 	input := FromJSON[VoteProposalArgs](*payload, "VoteProposalArgs")
