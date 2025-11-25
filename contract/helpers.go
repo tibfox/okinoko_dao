@@ -9,6 +9,31 @@ import (
 	"time"
 )
 
+// cachedEnv holds the environment for the current contract call.
+var (
+	cachedEnv       sdk.Env
+	cachedEnvLoaded bool
+)
+
+// resetCallContext clears any cached call-scoped data.
+func resetCallContext() {
+	cachedEnvLoaded = false
+}
+
+// currentEnv returns the cached environment, loading it from the host if needed.
+func currentEnv() *sdk.Env {
+	if !cachedEnvLoaded {
+		cachedEnv = sdk.GetEnv()
+		cachedEnvLoaded = true
+	}
+	return &cachedEnv
+}
+
+// currentIntents returns intents from the cached environment.
+func currentIntents() []sdk.Intent {
+	return currentEnv().Intents
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Helpers: keys, guids, time
 ////////////////////////////////////////////////////////////////////////////////
@@ -35,8 +60,8 @@ func isValidAsset(token string) bool {
 
 // getFirstTransferAllow scans the provided intents and returns the first valid
 // transfer.allow intent as a TransferAllow object. Returns nil if none found.
-func getFirstTransferAllow(intents []sdk.Intent) *TransferAllow {
-	for _, intent := range intents {
+func getFirstTransferAllow() *TransferAllow {
+	for _, intent := range currentIntents() {
 		if intent.Type == "transfer.allow" {
 			token := intent.Args["token"]
 			if !isValidAsset(token) {
@@ -59,7 +84,7 @@ func getFirstTransferAllow(intents []sdk.Intent) *TransferAllow {
 
 // getSenderAddress returns the address of the current transaction sender.
 func getSenderAddress() sdk.Address {
-	return sdk.GetEnv().Sender.Address
+	return currentEnv().Sender.Address
 }
 
 // projectKey builds a storage key string for a project by ID.

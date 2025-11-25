@@ -312,7 +312,16 @@ func ExecuteProposal(proposalID *uint64) *string {
 					_ = json.Unmarshal([]byte(value), &v)
 					prj.Config.ProposalCost = v
 					metaChanged = true
-
+				case "update_membershipNFT":
+					var v uint64
+					_ = json.Unmarshal([]byte(value), &v)
+					prj.Config.MembershipNFT = &v
+					metaChanged = true
+				case "update_membershipNFTContract":
+					var v string
+					_ = json.Unmarshal([]byte(value), &v)
+					prj.Config.MembershipNFTContract = &v
+					metaChanged = true
 				case "toggle_pause":
 					prj.Paused = !prj.Paused
 					metaChanged = true
