@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+const (
+	FallbackNFTContract = "TODO: set default nft contract"
+	FallbackNFTFunction = "nft_hasNFTEdition"
+)
+
 // CreateProjectArgs defines the JSON payload for creating a project.
 //
 // Fields:
@@ -193,11 +198,20 @@ func JoinProject(projectID *uint64) *string {
 		// check if caller is owner of any edition of the membership nft
 		// GetNFTOwnedEditionsArgs specifies the arguments to query editions owned by an address.
 
+		nftContract := prj.Config.MembershipNFTContract
+		if nftContract == nil {
+			nftContract = strptr(FallbackNFTContract)
+		}
+
+		nftFunction := prj.Config.MembershipNFTContractFunction
+		if nftFunction == nil {
+			nftFunction = strptr(FallbackNFTFunction)
+		}
 		payload := UInt64ToString(*prj.Config.MembershipNFT) + "|" + caller.String()
 
 		editions := sdk.ContractCall(
-			*prj.Config.MembershipNFTContract,
-			*prj.Config.MembershipNFTContractFunction,
+			*nftContract,
+			*nftFunction,
 			payload,
 			nil)
 		if editions == nil || *editions == "[]" || *editions == "" {

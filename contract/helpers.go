@@ -15,11 +15,6 @@ var (
 	cachedEnvLoaded bool
 )
 
-// resetCallContext clears any cached call-scoped data.
-func resetCallContext() {
-	cachedEnvLoaded = false
-}
-
 // currentEnv returns the cached environment, loading it from the host if needed.
 func currentEnv() *sdk.Env {
 	if !cachedEnvLoaded {
