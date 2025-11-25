@@ -24,16 +24,18 @@ type CreateProjectArgs struct {
 //
 // Fields include thresholds for voting, quorum, cooldowns, and staking rules.
 type ProjectConfig struct {
-	VotingSystem          VotingSystem `json:"votingSystem"`      // democratic or stake-based voting
-	ThresholdPercent      float64      `json:"threshold"`         // minimum % an answer needs to be valid
-	QuorumPercent         float64      `json:"quorum"`            // minimum % of votes required for a valid result
-	ProposalDurationHours uint64       `json:"proposalDuration"`  // proposal lifetime until tally
-	ExecutionDelayHours   uint64       `json:"executionDelay"`    // delay between tally and execution
-	LeaveCooldownHours    uint64       `json:"leaveCooldown"`     // cooldown for member exits
-	ProposalCost          float64      `json:"proposalCost"`      // minimum transfer required to create a proposal
-	StakeMinAmt           float64      `json:"minStake"`          // minimum transfer for membership in stake-based projects
-	MembershipNFT         *uint64      `json:"memberNFT"`         // NFT required for membership (optional)
-	MembershipNFTContract *string      `json:"memberNFTContract"` // NFT contract address (optional)
+	VotingSystem                  VotingSystem `json:"votingSystem"`              // democratic or stake-based voting
+	ThresholdPercent              float64      `json:"threshold"`                 // minimum % an answer needs to be valid
+	QuorumPercent                 float64      `json:"quorum"`                    // minimum % of votes required for a valid result
+	ProposalDurationHours         uint64       `json:"proposalDuration"`          // proposal lifetime until tally
+	ExecutionDelayHours           uint64       `json:"executionDelay"`            // delay between tally and execution
+	LeaveCooldownHours            uint64       `json:"leaveCooldown"`             // cooldown for member exits
+	ProposalCost                  float64      `json:"proposalCost"`              // minimum transfer required to create a proposal
+	StakeMinAmt                   float64      `json:"minStake"`                  // minimum transfer for membership in stake-based projects
+	MembershipNFTContract         *string      `json:"memberNFTContract"`         // NFT Members: contract address (optional)
+	MembershipNFTContractFunction *string      `json:"memberNFTContractFunction"` // NFT Members: contract function (optional)
+	MembershipNFT                 *uint64      `json:"memberNFT"`                 // NFT Members: required for membership (optional)
+
 }
 
 // VotingSystem defines how votes are weighted within a project.
@@ -195,7 +197,7 @@ func JoinProject(projectID *uint64) *string {
 
 		editions := sdk.ContractCall(
 			*prj.Config.MembershipNFTContract,
-			"nft_hasNFTEdition",
+			*prj.Config.MembershipNFTContractFunction,
 			payload,
 			nil)
 		if editions == nil || *editions == "[]" || *editions == "" {
