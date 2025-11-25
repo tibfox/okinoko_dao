@@ -7,8 +7,14 @@ import (
 )
 
 const (
-	FallbackNFTContract = "TODO: set default nft contract"
-	FallbackNFTFunction = "nft_hasNFTEdition"
+	FallbackNFTContract           = "TODO: set default nft contract"
+	FallbackNFTFunction           = "nft_hasNFTEdition"
+	FallbackThresholdPercent      = 50.001
+	FallbackQuorumPercent         = 50.001
+	FallbackProposalDurationHours = 24
+	FallbackExecutionDelayHours   = 4
+	FallbackLeaveCooldownHours    = 24
+	FallbackProposalCost          = 1
 )
 
 // CreateProjectArgs defines the JSON payload for creating a project.
@@ -32,7 +38,7 @@ type ProjectConfig struct {
 	VotingSystem                  VotingSystem `json:"votingSystem"`              // democratic or stake-based voting
 	ThresholdPercent              float64      `json:"threshold"`                 // minimum % an answer needs to be valid
 	QuorumPercent                 float64      `json:"quorum"`                    // minimum % of votes required for a valid result
-	ProposalDurationHours         uint64       `json:"proposalDuration"`          // proposal lifetime until tally
+	ProposalDurationHours         uint64       `json:"proposalDurationHours"`     // proposal lifetime until tally
 	ExecutionDelayHours           uint64       `json:"executionDelay"`            // delay between tally and execution
 	LeaveCooldownHours            uint64       `json:"leaveCooldown"`             // cooldown for member exits
 	ProposalCost                  float64      `json:"proposalCost"`              // minimum transfer required to create a proposal
@@ -124,31 +130,27 @@ func CreateProject(payload *string) *string {
 		}
 	}
 
-	// draw the funds
-	mAmount := int64(ta.Limit * 1000)
-	sdk.HiveDraw(mAmount, ta.Token)
-
 	// --- create project ---
 	id := getCount(ProjectsCount)
 	now := time.Now().Unix()
 
 	if input.ProjectConfig.ThresholdPercent <= 0 {
-		input.ProjectConfig.ThresholdPercent = 50.001
+		input.ProjectConfig.ThresholdPercent = FallbackThresholdPercent
 	}
 	if input.ProjectConfig.QuorumPercent <= 0 {
-		input.ProjectConfig.QuorumPercent = 50.001
+		input.ProjectConfig.QuorumPercent = FallbackQuorumPercent
 	}
 	if input.ProjectConfig.ProposalDurationHours <= 0 {
-		input.ProjectConfig.ProposalDurationHours = 24
+		input.ProjectConfig.ProposalDurationHours = FallbackProposalDurationHours
 	}
 	if input.ProjectConfig.ExecutionDelayHours <= 0 {
-		input.ProjectConfig.ExecutionDelayHours = 4
+		input.ProjectConfig.ExecutionDelayHours = FallbackExecutionDelayHours
 	}
 	if input.ProjectConfig.LeaveCooldownHours <= 0 {
-		input.ProjectConfig.LeaveCooldownHours = 24
+		input.ProjectConfig.LeaveCooldownHours = FallbackLeaveCooldownHours
 	}
 	if input.ProjectConfig.ProposalCost <= 0 {
-		input.ProjectConfig.ProposalCost = 1
+		input.ProjectConfig.ProposalCost = FallbackProposalCost
 	}
 
 	prj := Project{
@@ -172,7 +174,10 @@ func CreateProject(payload *string) *string {
 		LastActionAt: now,
 		Reputation:   0,
 	}
-
+	// draw the funds
+	mAmount := int64(ta.Limit * 1000)
+	sdk.HiveDraw(mAmount, ta.Token)
+	// save project
 	saveProject(&prj)
 	setCount(ProjectsCount, id+1)
 
@@ -193,6 +198,10 @@ func JoinProject(projectID *uint64) *string {
 		sdk.Abort("project paused")
 	}
 	caller := getSenderAddress()
+
+	if _, exists := prj.Members[caller]; exists {
+		sdk.Abort("already a member")
+	}
 
 	if prj.Config.MembershipNFT != nil {
 		// check if caller is owner of any edition of the membership nft
@@ -223,9 +232,6 @@ func JoinProject(projectID *uint64) *string {
 	if ta == nil {
 		sdk.Abort("no valid transfer intent provided")
 	}
-	// draw the funds
-	mAmount := int64(ta.Limit * 1000)
-	sdk.HiveDraw(mAmount, ta.Token)
 
 	if ta.Limit != prj.Config.StakeMinAmt && prj.Config.VotingSystem == SystemDemocratic {
 		sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
@@ -242,6 +248,10 @@ func JoinProject(projectID *uint64) *string {
 		JoinedAt:     now,
 		LastActionAt: now,
 	}
+	// draw the funds
+	mAmount := int64(ta.Limit * 1000)
+	sdk.HiveDraw(mAmount, ta.Token)
+	// save project
 	saveProject(prj)
 	emitJoinedEvent(prj.ID, caller.String())
 	emitFundsAdded(prj.ID, caller.String(), ta.Limit, ta.Token.String(), true)

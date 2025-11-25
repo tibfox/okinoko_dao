@@ -13,7 +13,7 @@ This smart contract powers community-driven projects on the vsc network. It allo
   - How members join (fixed fee for equal voting or stake-based for weighted voting)
   - The percentage of votes needed for approval
   - Proposal cost (goes into project funds)
-  - Proposal duration
+  - Proposal duration (in hours)
   - Minimum/Exact join amounts needed for users to join
   - Optional: Enable/disable features like reward distribution, secret voting, and more
 

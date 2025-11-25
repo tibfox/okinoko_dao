@@ -86,7 +86,7 @@ type CreateProposalArgs struct {
 	Description      string           `json:"desc"`
 	OptionsList      []string         `json:"options"`
 	ProposalOutcome  *ProposalOutcome `json:"outcome"`
-	ProposalDuration uint64           `json:"duration"`
+	ProposalDuration uint64           `json:"durationHours"`
 	JsonMetadata     map[string]any   `json:"jsonMeta,omitempty"`
 }
 
@@ -134,7 +134,7 @@ func CreateProposal(payload *string) *string {
 		}
 		duration = input.ProposalDuration
 	} else {
-		duration = prj.Config.ProposalDurationHours * 3600
+		duration = prj.Config.ProposalDurationHours
 	}
 
 	now := time.Now().Unix()
