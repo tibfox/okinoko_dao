@@ -1,0 +1,11 @@
+./cbor_cid.go
+./deferred.go
+./gen.go
+./helper_types.go
+./io.go
+./links.go
+./package.go
+./peeker.go
+./utils.go
+./validate.go
+./writefile.go

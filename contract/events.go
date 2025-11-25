@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 	"strconv"
 )
@@ -13,7 +14,7 @@ import (
 //	MemberJoined|id:<projectId>|by:<memberAddress>
 func emitJoinedEvent(projectId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
-		"MemberJoined|id:%d|by:%s",
+		"mj|id:%d|by:%s",
 		projectId,
 		memberAddress,
 	))
@@ -26,7 +27,7 @@ func emitJoinedEvent(projectId uint64, memberAddress string) {
 //	MemberLeft|id:<projectId>|by:<memberAddress>
 func emitLeaveEvent(projectId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
-		"MemberLeft|id:%d|by:%s",
+		"ml|id:%d|by:%s",
 		projectId,
 		memberAddress,
 	))
@@ -39,7 +40,7 @@ func emitLeaveEvent(projectId uint64, memberAddress string) {
 //	ProjectCreated|id:<projectId>|by:<createdByAddress>
 func emitProjectCreatedEvent(projectId uint64, createdByAddress string) {
 	sdk.Log(fmt.Sprintf(
-		"ProjectCreated|id:%d|by:%s",
+		"dc|id:%d|by:%s",
 		projectId,
 		createdByAddress,
 	))
@@ -52,7 +53,7 @@ func emitProjectCreatedEvent(projectId uint64, createdByAddress string) {
 //	ProposalCreated|id:<proposalId>|by:<memberAddress>
 func emitProposalCreatedEvent(proposalId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
-		"ProposalCreated|id:%d|by:%s",
+		"pc|id:%d|by:%s",
 		proposalId,
 		memberAddress,
 	))
@@ -63,11 +64,11 @@ func emitProposalCreatedEvent(proposalId uint64, memberAddress string) {
 // The event is recorded in the format:
 //
 //	ProposalState|id:<proposalId>|state:<proposalState>
-func emitProposalStateChangedEvent(proposalId uint64, proposalState ProposalState) {
+func emitProposalStateChangedEvent(proposalId uint64, proposalState dao.ProposalState) {
 	sdk.Log(fmt.Sprintf(
-		"ProposalState|id:%d|state:%s",
+		"ps|id:%d|s:%s",
 		proposalId,
-		proposalState,
+		proposalState.String(),
 	))
 }
 
@@ -78,7 +79,7 @@ func emitProposalStateChangedEvent(proposalId uint64, proposalState ProposalStat
 //	ProposalResult|projectId:<projectId>|proposalId:<proposalId>|result:<result>
 func emitProposalResultEvent(projectId uint64, proposalId uint64, result string) {
 	sdk.Log(fmt.Sprintf(
-		"ProposalResult|projectId:%d|proposalId:%d|result:%s",
+		"pr|pId:%d|prId:%d|r:%s",
 		projectId,
 		proposalId,
 		result,
@@ -92,7 +93,7 @@ func emitProposalResultEvent(projectId uint64, proposalId uint64, result string)
 //	Vote|id:<proposalId>|by:<voter>|choices:<choices>|weight:<weight>
 func emitVoteCasted(proposalId uint64, voter string, choices []uint, weight float64) {
 	sdk.Log(fmt.Sprintf(
-		"Vote|id:%d|by:%s|choices:%s|weight:%f",
+		"v|id:%d|by:%s|cs:%s|w:%f",
 		proposalId,
 		voter,
 		UIntSliceToString(choices),
@@ -107,7 +108,7 @@ func emitVoteCasted(proposalId uint64, voter string, choices []uint, weight floa
 //	AddFunds|id:<projectId>|by:<addedByAddress>|amount:<amount>|asset:<asset>|stake:<toStake>
 func emitFundsAdded(projectId uint64, addedByAddress string, amount float64, asset string, toStake bool) {
 	sdk.Log(fmt.Sprintf(
-		"AddFunds|id:%d|by:%s|amount:%f|asset:%s|stake:%s",
+		"af|id:%d|by:%s|am:%f|as:%s|s:%s",
 		projectId,
 		addedByAddress,
 		amount,
@@ -125,7 +126,7 @@ func emitFundsAdded(projectId uint64, addedByAddress string, amount float64, ass
 // Note: "RmoveFunds" in the log string appears to be a typo and should likely be corrected to "RemoveFunds".
 func emitFundsRemoved(projectId uint64, removedToAddress string, amount float64, asset string, fromStake bool) {
 	sdk.Log(fmt.Sprintf(
-		"RmoveFunds|id:%d|to:%s|amount:%f|asset:%s|fromStake:%s",
+		"rf|id:%d|to:%s|am:%f|as:%s|fs:%s",
 		projectId,
 		removedToAddress,
 		amount,

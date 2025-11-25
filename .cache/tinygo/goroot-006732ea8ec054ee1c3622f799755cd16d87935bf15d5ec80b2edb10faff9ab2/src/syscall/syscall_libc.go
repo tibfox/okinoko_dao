@@ -1,0 +1,1 @@
+/usr/local/lib/tinygo/src/syscall/syscall_libc.go

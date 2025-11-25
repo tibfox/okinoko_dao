@@ -1,8 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 	"strconv"
 	"strings"
@@ -13,13 +13,62 @@ import (
 var (
 	cachedEnv       sdk.Env
 	cachedEnvLoaded bool
+	cachedTransfer  *TransferAllow
+	cachedMembers   map[string]*dao.Member
 )
+
+const (
+	kProjectMeta    byte = 0x01
+	kProjectConfig  byte = 0x02
+	kProjectFinance byte = 0x03
+	kProjectMember  byte = 0x04
+	kProposalMeta   byte = 0x10
+	kProposalOption byte = 0x11
+	kVoteReceipt    byte = 0x20
+)
+
+func packU64LEInline(x uint64, dst []byte) {
+	dst[0] = byte(x)
+	dst[1] = byte(x >> 8)
+	dst[2] = byte(x >> 16)
+	dst[3] = byte(x >> 24)
+	dst[4] = byte(x >> 32)
+	dst[5] = byte(x >> 40)
+	dst[6] = byte(x >> 48)
+	dst[7] = byte(x >> 56)
+}
+
+func packU32LEInline(x uint32, dst []byte) {
+	dst[0] = byte(x)
+	dst[1] = byte(x >> 8)
+	dst[2] = byte(x >> 16)
+	dst[3] = byte(x >> 24)
+}
+
+func packU64LE(x uint64, dst []byte) []byte {
+	return append(dst,
+		byte(x),
+		byte(x>>8),
+		byte(x>>16),
+		byte(x>>24),
+		byte(x>>32),
+		byte(x>>40),
+		byte(x>>48),
+		byte(x>>56),
+	)
+}
 
 // currentEnv returns the cached environment, loading it from the host if needed.
 func currentEnv() *sdk.Env {
-	if !cachedEnvLoaded {
+	var currentTx string
+	if txPtr := sdk.GetEnvKey("tx.id"); txPtr != nil {
+		currentTx = *txPtr
+	}
+	if !cachedEnvLoaded || cachedEnv.TxId != currentTx {
 		cachedEnv = sdk.GetEnv()
 		cachedEnvLoaded = true
+		cachedTransfer = nil
+		cachedMembers = map[string]*dao.Member{}
 	}
 	return &cachedEnv
 }
@@ -56,6 +105,9 @@ func isValidAsset(token string) bool {
 // getFirstTransferAllow scans the provided intents and returns the first valid
 // transfer.allow intent as a TransferAllow object. Returns nil if none found.
 func getFirstTransferAllow() *TransferAllow {
+	if cachedTransfer != nil {
+		return cachedTransfer
+	}
 	for _, intent := range currentIntents() {
 		if intent.Type == "transfer.allow" {
 			token := intent.Args["token"]
@@ -71,6 +123,7 @@ func getFirstTransferAllow() *TransferAllow {
 				Limit: limit,
 				Token: sdk.Asset(token),
 			}
+			cachedTransfer = ta
 			return ta
 		}
 	}
@@ -84,55 +137,459 @@ func getSenderAddress() sdk.Address {
 
 // projectKey builds a storage key string for a project by ID.
 func projectKey(id uint64) string {
-	return "prj:" + UInt64ToString(id)
+	var buf [9]byte
+	buf[0] = kProjectMeta
+	packU64LEInline(id, buf[1:])
+	return string(buf[:])
+}
+
+func projectConfigKey(id uint64) string {
+	var buf [9]byte
+	buf[0] = kProjectConfig
+	packU64LEInline(id, buf[1:])
+	return string(buf[:])
+}
+
+func projectFinanceKey(id uint64) string {
+	var buf [9]byte
+	buf[0] = kProjectFinance
+	packU64LEInline(id, buf[1:])
+	return string(buf[:])
+}
+
+func memberKey(projectID uint64, addr dao.Address) string {
+	addrStr := dao.AddressToString(addr)
+	buf := make([]byte, 0, 1+8+len(addrStr))
+	buf = append(buf, kProjectMember)
+	buf = packU64LE(projectID, buf)
+	buf = append(buf, addrStr...)
+	return string(buf)
 }
 
 // proposalKey builds a storage key string for a proposal by ID.
 func proposalKey(id uint64) string {
-	return "prpsl:" + UInt64ToString(id)
+	var buf [9]byte
+	buf[0] = kProposalMeta
+	packU64LEInline(id, buf[1:])
+	return string(buf[:])
+}
+
+func proposalOptionKey(id uint64, idx uint32) string {
+	var buf [13]byte
+	buf[0] = kProposalOption
+	packU64LEInline(id, buf[1:])
+	packU32LEInline(idx, buf[9:])
+	return string(buf[:])
 }
 
 // nowUnix returns the current Unix timestamp.
 // It prefers the chain's block timestamp from the environment if available.
 func nowUnix() int64 {
-	// try chain timestamp via env key
-	if tsPtr := sdk.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
-		// try parse as integer seconds
-		if v, err := strconv.ParseInt(*tsPtr, 10, 64); err == nil {
+	if ts := currentEnv().Timestamp; ts != "" {
+		if v, ok := parseTimestamp(ts); ok {
 			return v
 		}
-		// try RFC3339
-		if t, err := time.Parse(time.RFC3339, *tsPtr); err == nil {
-			return t.Unix()
+	}
+	if tsPtr := sdk.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
+		if v, ok := parseTimestamp(*tsPtr); ok {
+			return v
 		}
 	}
 	return time.Now().Unix()
 }
 
-///////////////////////////////////////////////////
-// Conversions from/to JSON strings
-///////////////////////////////////////////////////
-
-// ToJSON marshals a Go value into a JSON string.
-// Aborts execution if marshalling fails.
-func ToJSON[T any](v T, objectType string) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		sdk.Abort(fmt.Sprintf("failed to marshal %s\nInput data:%+v\nError: %v:", objectType, v, err))
+func parseTimestamp(val string) (int64, bool) {
+	if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+		return v, true
 	}
-	return string(b)
+	if t, err := time.Parse(time.RFC3339, val); err == nil {
+		return t.Unix(), true
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05", val, time.UTC); err == nil {
+		return t.Unix(), true
+	}
+	return 0, false
 }
 
-// FromJSON unmarshals a JSON string into a Go value of type T.
-// Aborts execution if unmarshalling fails.
-func FromJSON[T any](data string, objectType string) *T {
-	data = strings.TrimSpace(data)
-	var v T
-	if err := json.Unmarshal([]byte(data), &v); err != nil {
-		sdk.Abort(fmt.Sprintf(
-			"failed to unmarshal %s\nInput data:%s\nError: %v:", objectType, data, err))
+///////////////////////////////////////////////////
+// Payload decoding helpers
+///////////////////////////////////////////////////
+
+func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
+	raw := unwrapPayload(payload, "project payload missing")
+	parts := strings.Split(raw, "|")
+	get := func(i int) string {
+		if i < len(parts) {
+			return parts[i]
+		}
+		return ""
 	}
-	return &v
+
+	args := &dao.CreateProjectArgs{
+		Name:        strings.TrimSpace(get(0)),
+		Description: strings.TrimSpace(get(1)),
+		Metadata:    normalizeOptionalField(get(13)),
+	}
+	cfg := dao.ProjectConfig{
+		VotingSystem: parseVotingSystem(get(2)),
+	}
+	cfg.ThresholdPercent = parseFloatField(get(3), "threshold")
+	cfg.QuorumPercent = parseFloatField(get(4), "quorum")
+	cfg.ProposalDurationHours = parseUintField(get(5), "proposal duration")
+	cfg.ExecutionDelayHours = parseUintField(get(6), "execution delay")
+	cfg.LeaveCooldownHours = parseUintField(get(7), "leave cooldown")
+	cfg.ProposalCost = parseFloatField(get(8), "proposal cost")
+	cfg.StakeMinAmt = parseFloatField(get(9), "min stake")
+	if v := strings.TrimSpace(get(10)); v != "" {
+		cfg.MembershipNFTContract = strptr(v)
+	}
+	if v := strings.TrimSpace(get(11)); v != "" {
+		cfg.MembershipNFTContractFunction = strptr(v)
+	}
+	if v := strings.TrimSpace(get(12)); v != "" {
+		parsed, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			sdk.Abort("invalid membership nft id")
+		}
+		cfg.MembershipNFT = &parsed
+	}
+	normalizeProjectConfig(&cfg)
+	args.ProjectConfig = cfg
+	return args
+}
+
+func decodeCreateProposalArgs(payload *string) *dao.CreateProposalArgs {
+	raw := unwrapPayload(payload, "proposal payload missing")
+	parts := strings.Split(raw, "|")
+	get := func(i int) string {
+		if i < len(parts) {
+			return parts[i]
+		}
+		return ""
+	}
+	projectID := parseUintField(get(0), "project id")
+	duration := parseUintField(get(3), "proposal duration")
+	options := parseOptionsField(get(4))
+	forcePoll := parseBoolField(get(5))
+	payouts := parsePayoutField(get(6))
+	metaOutcome := parseMetadataField(get(7))
+	metadata := normalizeOptionalField(get(8))
+
+	var outcome *dao.ProposalOutcome
+	if len(payouts) > 0 || len(metaOutcome) > 0 {
+		outcome = &dao.ProposalOutcome{
+			Meta:   metaOutcome,
+			Payout: payouts,
+		}
+	}
+
+	return &dao.CreateProposalArgs{
+		ProjectID:        projectID,
+		Name:             strings.TrimSpace(get(1)),
+		Description:      strings.TrimSpace(get(2)),
+		OptionsList:      options,
+		ProposalOutcome:  outcome,
+		ProposalDuration: duration,
+		Metadata:         metadata,
+		ForcePoll:        forcePoll,
+	}
+}
+
+func decodeVoteProposalArgs(payload *string) *dao.VoteProposalArgs {
+	raw := unwrapPayload(payload, "vote payload missing")
+	parts := strings.Split(raw, "|")
+	if len(parts) < 2 {
+		sdk.Abort("vote payload requires proposalId|choices")
+	}
+	proposalID := parseUintField(parts[0], "proposal id")
+	choices := parseChoiceField(parts[1])
+	return &dao.VoteProposalArgs{
+		ProposalID: proposalID,
+		Choices:    choices,
+	}
+}
+
+func decodeAddFundsArgs(payload *string) *dao.AddFundsArgs {
+	raw := unwrapPayload(payload, "add funds payload missing")
+	parts := strings.Split(raw, "|")
+	if len(parts) < 2 {
+		sdk.Abort("add funds payload requires projectId|toStake")
+	}
+	projectID := parseUintField(parts[0], "project id")
+	toStake := parseBoolField(parts[1])
+	return &dao.AddFundsArgs{
+		ProjectID: projectID,
+		ToStake:   toStake,
+	}
+}
+
+func unwrapPayload(payload *string, errMsg string) string {
+	if payload == nil {
+		sdk.Abort(errMsg)
+	}
+	raw := strings.TrimSpace(*payload)
+	if raw == "" {
+		sdk.Abort(errMsg)
+	}
+	if len(raw) >= 2 {
+		first := raw[0]
+		last := raw[len(raw)-1]
+		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			if unquoted, err := strconv.Unquote(raw); err == nil {
+				return unquoted
+			}
+			raw = strings.TrimSpace(raw[1 : len(raw)-1])
+			if raw == "" {
+				sdk.Abort(errMsg)
+			}
+		}
+	}
+	return raw
+}
+
+func saveMember(projectID uint64, member *dao.Member) {
+	key := memberKey(projectID, member.Address)
+	data := dao.EncodeMember(member)
+	sdk.StateSetObject(key, string(data))
+	if cachedMembers != nil {
+		cp := *member
+		cachedMembers[key] = &cp
+	}
+}
+
+func loadMember(projectID uint64, addr dao.Address) (*dao.Member, bool) {
+	key := memberKey(projectID, addr)
+	if cachedMembers != nil {
+		if cached, ok := cachedMembers[key]; ok {
+			cp := *cached
+			return &cp, true
+		}
+	}
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		return nil, false
+	}
+	member, err := dao.DecodeMember([]byte(*ptr))
+	if err != nil {
+		sdk.Abort("failed to decode member")
+	}
+	if cachedMembers != nil {
+		cp := *member
+		cachedMembers[key] = &cp
+	}
+	return member, true
+}
+
+func deleteMember(projectID uint64, addr dao.Address) {
+	key := memberKey(projectID, addr)
+	sdk.StateDeleteObject(key)
+	if cachedMembers != nil {
+		delete(cachedMembers, key)
+	}
+}
+
+func saveProposalOption(proposalID uint64, idx uint32, opt *dao.ProposalOption) {
+	key := proposalOptionKey(proposalID, idx)
+	data := dao.EncodeProposalOption(opt)
+	sdk.StateSetObject(key, string(data))
+}
+
+func loadProposalOption(proposalID uint64, idx uint32) *dao.ProposalOption {
+	key := proposalOptionKey(proposalID, idx)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		sdk.Abort("proposal option not found")
+	}
+	opt, err := dao.DecodeProposalOption([]byte(*ptr))
+	if err != nil {
+		sdk.Abort("failed to decode proposal option")
+	}
+	return opt
+}
+
+func loadProposalOptions(proposalID uint64, count uint32) []dao.ProposalOption {
+	opts := make([]dao.ProposalOption, count)
+	for i := uint32(0); i < count; i++ {
+		opt := loadProposalOption(proposalID, i)
+		opts[i] = *opt
+	}
+	return opts
+}
+
+func stateSetIfChanged(key, value string) {
+	if existing := sdk.StateGetObject(key); existing != nil && *existing == value {
+		return
+	}
+	sdk.StateSetObject(key, value)
+}
+
+func parseVotingSystem(val string) dao.VotingSystem {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "0":
+		return dao.VotingSystemDemocratic
+	case "1":
+		return dao.VotingSystemStake
+	default:
+		return dao.VotingSystemStake
+	}
+}
+
+func parseFloatField(val string, field string) float64 {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("invalid %s", field))
+	}
+	return f
+}
+
+func parseUintField(val string, field string) uint64 {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0
+	}
+	n, err := strconv.ParseUint(val, 10, 64)
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("invalid %s", field))
+	}
+	return n
+}
+
+func parseBoolField(val string) bool {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "1", "true", "yes", "y", "poll":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseOptionsField(val string) []string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return []string{}
+	}
+	raw := strings.Split(val, ";")
+	opts := make([]string, 0, len(raw))
+	for _, opt := range raw {
+		opt = strings.TrimSpace(opt)
+		if opt != "" {
+			opts = append(opts, opt)
+		}
+	}
+	return opts
+}
+
+func parseChoiceField(val string) []uint {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return []uint{}
+	}
+	raw := strings.FieldsFunc(val, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	choices := make([]uint, 0, len(raw))
+	for _, part := range raw {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		idx, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			sdk.Abort("invalid choice index")
+		}
+		choices = append(choices, uint(idx))
+	}
+	return choices
+}
+
+func parseMetadataField(val string) map[string]string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+	if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+		val = strings.TrimSpace(val[1 : len(val)-1])
+	}
+	if val == "" {
+		return nil
+	}
+	meta := map[string]string{}
+	pairs := strings.Split(val, ";")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		split := strings.SplitN(pair, "=", 2)
+		if len(split) != 2 {
+			sdk.Abort("invalid metadata entry (use key=value)")
+		}
+		meta[strings.TrimSpace(split[0])] = strings.TrimSpace(split[1])
+	}
+	return meta
+}
+
+func normalizeProjectConfig(cfg *dao.ProjectConfig) {
+	if cfg.VotingSystem == dao.VotingSystemUnspecified {
+		cfg.VotingSystem = dao.VotingSystemStake
+	}
+	if cfg.ThresholdPercent <= 0 {
+		cfg.ThresholdPercent = FallbackThresholdPercent
+	}
+	if cfg.QuorumPercent <= 0 {
+		cfg.QuorumPercent = FallbackQuorumPercent
+	}
+	if cfg.ProposalDurationHours <= 0 {
+		cfg.ProposalDurationHours = FallbackProposalDurationHours
+	}
+	if cfg.ExecutionDelayHours <= 0 {
+		cfg.ExecutionDelayHours = FallbackExecutionDelayHours
+	}
+	if cfg.LeaveCooldownHours <= 0 {
+		cfg.LeaveCooldownHours = FallbackLeaveCooldownHours
+	}
+	if cfg.ProposalCost <= 0 {
+		cfg.ProposalCost = FallbackProposalCost
+	}
+}
+
+func normalizeOptionalField(val string) string {
+	val = strings.TrimSpace(val)
+	if val == "" || val == "\"\"" || val == "''" {
+		return ""
+	}
+	return val
+}
+
+func parsePayoutField(val string) map[dao.Address]dao.Amount {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+	payouts := map[dao.Address]dao.Amount{}
+	entries := strings.Split(val, ";")
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		idx := strings.LastIndex(entry, ":")
+		if idx <= 0 || idx == len(entry)-1 {
+			sdk.Abort("invalid payout entry (addr:amount)")
+		}
+		addr := dao.AddressFromString(strings.TrimSpace(entry[:idx]))
+		amountStr := strings.TrimSpace(entry[idx+1:])
+		amount, err := strconv.ParseFloat(amountStr, 64)
+		if err != nil {
+			sdk.Abort("invalid payout amount")
+		}
+		payouts[addr] = dao.FloatToAmount(amount)
+	}
+	return payouts
 }
 
 // strptr returns a pointer to the provided string.

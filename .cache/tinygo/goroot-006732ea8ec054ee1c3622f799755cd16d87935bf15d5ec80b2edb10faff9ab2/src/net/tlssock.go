@@ -1,0 +1,1 @@
+/usr/local/lib/tinygo/src/net/tlssock.go

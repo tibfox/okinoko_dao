@@ -1,0 +1,4 @@
+./format.go
+./inline.go
+./set.go
+./slice.go

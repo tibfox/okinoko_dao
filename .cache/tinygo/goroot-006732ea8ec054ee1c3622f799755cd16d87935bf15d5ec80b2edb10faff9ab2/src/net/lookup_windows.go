@@ -1,0 +1,1 @@
+/usr/local/lib/tinygo/src/net/lookup_windows.go

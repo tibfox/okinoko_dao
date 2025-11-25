@@ -1,0 +1,6 @@
+./blocks_amd64.go
+./blocks_generic.go
+./blocksisa_amd64.go
+./cpu_amd64.go
+./blocks_amd64.s
+./cpu_amd64.s

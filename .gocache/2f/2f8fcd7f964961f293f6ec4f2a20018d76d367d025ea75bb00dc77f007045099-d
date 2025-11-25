@@ -1,0 +1,2 @@
+./setup_unix.go
+./wasm.go

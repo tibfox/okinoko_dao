@@ -1,0 +1,1 @@
+/usr/local/lib/tinygo/src/os/file_posix.go

@@ -1,0 +1,10 @@
+./conn.go
+./conn_linux.go
+./doc.go
+./ipv6zone.go
+./rawconn.go
+./sys.go
+./sys_linux.go
+./sys_linux_amd64.go
+./sys_unix.go
+./zsys_linux.go

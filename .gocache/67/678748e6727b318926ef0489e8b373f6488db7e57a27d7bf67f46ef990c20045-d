@@ -1,0 +1,4 @@
+./error.go
+./hasher.go
+./hasher224.go
+./hasher256.go

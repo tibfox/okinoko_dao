@@ -1,94 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
+	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
+	"strconv"
 	"time"
 )
-
-// -----------------------------------------------------------------------------
-// Proposal-related types
-// -----------------------------------------------------------------------------
-
-// Proposal represents a proposal created within a project.
-// Proposals can be polls, payouts, or metadata changes.
-type Proposal struct {
-	ID                  uint64           `json:"id"`
-	ProjectID           uint64           `json:"projectId"`
-	Creator             sdk.Address      `json:"creator"`
-	Name                string           `json:"name"`
-	Description         string           `json:"description"`
-	Options             []ProposalOption `json:"options"`
-	DurationHours       uint64           `json:"duration"`
-	CreatedAt           int64            `json:"createdAt"`
-	State               ProposalState    `json:"state"`
-	ProposalOutcome     *ProposalOutcome `json:"outcome"`
-	Tx                  string           `json:"tx"`
-	StakeSnapshot       float64          `json:"snapshot"`
-	MemberCountSnapshot uint             `json:"memberSnapshot"`
-	JsonMetadata        map[string]any   `json:"jsonMeta,omitempty"` // TODO: add max & check length
-	IsPoll              bool             `json:"IsPoll"`
-	ResultOptionId      int              `json:"ResultOptionId"`
-}
-
-// ProposalOutcome defines the result of a proposal, including
-// metadata updates and payout distributions.
-type ProposalOutcome struct {
-	Meta   map[string]string       `json:"meta,omitempty"`
-	Payout map[sdk.Address]float64 `json:"payout,omitempty"`
-}
-
-// ProposalState defines the lifecycle state of a proposal.
-type ProposalState string
-
-const (
-	// ProposalActive indicates the proposal is still open for voting.
-	ProposalActive ProposalState = "active"
-
-	// ProposalClosed means the proposal finished but no transfer/meta change occurred.
-	ProposalClosed ProposalState = "closed"
-
-	// ProposalPassed means the proposal passed and awaits execution (transfer/meta change).
-	ProposalPassed ProposalState = "passed"
-
-	// ProposalExecuted indicates the proposal has been executed successfully.
-	ProposalExecuted ProposalState = "executed"
-
-	// ProposalFailed means the proposal did not reach quorum/threshold and failed.
-	ProposalFailed ProposalState = "failed"
-)
-
-// ProposalOption represents a voting option within a proposal.
-type ProposalOption struct {
-	Text  string    `json:"text"`
-	Votes []float64 `json:"votes"`
-}
-
-// -----------------------------------------------------------------------------
-// Create Proposal
-// -----------------------------------------------------------------------------
-
-// CreateProposalArgs defines the JSON payload for creating a proposal.
-//
-// Fields:
-//   - ProjectID: The project to which the proposal belongs.
-//   - Name: Name/title of the proposal.
-//   - Description: Human-readable description.
-//   - OptionsList: Voting options (for polls). If empty, defaults to ["no","yes"].
-//   - ProposalOutcome: Outcome instructions (payout/meta changes).
-//   - ProposalDuration: Duration in hours (falls back to project defaults).
-//   - JsonMetadata: Optional extensibility metadata.
-type CreateProposalArgs struct {
-	ProjectID        uint64           `json:"projectId"`
-	Name             string           `json:"name"`
-	Description      string           `json:"desc"`
-	OptionsList      []string         `json:"options"`
-	ProposalOutcome  *ProposalOutcome `json:"outcome"`
-	ProposalDuration uint64           `json:"durationHours"`
-	JsonMetadata     map[string]any   `json:"jsonMeta,omitempty"`
-}
 
 // CreateProposal creates a new proposal within a project.
 // Only members may create proposals. If no options are provided,
@@ -96,33 +15,28 @@ type CreateProposalArgs struct {
 //
 //go:wasmexport proposal_create
 func CreateProposal(payload *string) *string {
-	input := FromJSON[CreateProposalArgs](*payload, "CreateProposalArgs")
-	// TODO: validate input.Payout & input.Meta
-	if input.ProposalOutcome != nil {
-
-	}
+	input := decodeCreateProposalArgs(payload)
 
 	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
 	prj := loadProject(input.ProjectID)
 	if prj.Paused {
 		sdk.Abort("project is paused")
 	}
 
 	// Only members can create
-	if _, ok := prj.Members[caller]; !ok {
+	if _, exists := loadMember(prj.ID, callerAddr); !exists {
 		sdk.Abort("only members can create proposals")
 	}
 
-	isPoll := true
-	// default to no/yes
+	isPoll := input.ForcePoll
 	if len(input.OptionsList) == 0 {
 		input.OptionsList = []string{"no", "yes"}
-		isPoll = false
-	}
-
-	opts := make([]ProposalOption, len(input.OptionsList))
-	for i, txt := range input.OptionsList {
-		opts[i] = ProposalOption{Text: txt, Votes: []float64{}}
+		if !input.ForcePoll {
+			isPoll = false
+		}
+	} else if !input.ForcePoll {
+		isPoll = true
 	}
 
 	id := getCount(ProposalsCount)
@@ -137,40 +51,40 @@ func CreateProposal(payload *string) *string {
 		duration = prj.Config.ProposalDurationHours
 	}
 
-	now := time.Now().Unix()
+	now := nowUnix()
 
-	// Count members
-	memberSnap := uint(len(prj.Members))
+	// Count members / sum stakes from aggregates
+	memberSnap := uint(prj.MemberCount)
+	stakeSnap := prj.StakeTotal
 
-	// Sum stakes
-	var stakeSnap float64
-	for _, m := range prj.Members {
-		stakeSnap += m.Stake
-	}
-
-	prpsl := &Proposal{
+	prpsl := &dao.Proposal{
 		ID:                  id,
 		ProjectID:           input.ProjectID,
-		Creator:             caller,
+		Creator:             callerAddr,
 		Name:                input.Name,
 		Description:         input.Description,
-		JsonMetadata:        input.JsonMetadata,
-		Options:             opts,
-		ProposalOutcome:     input.ProposalOutcome,
+		Metadata:            input.Metadata,
+		Outcome:             input.ProposalOutcome,
 		CreatedAt:           now,
 		DurationHours:       duration,
-		State:               ProposalActive,
+		State:               dao.ProposalActive,
 		Tx:                  *sdk.GetEnvKey("tx.id"),
 		MemberCountSnapshot: memberSnap,
 		StakeSnapshot:       stakeSnap,
 		IsPoll:              isPoll,
+		OptionCount:         uint32(len(input.OptionsList)),
 	}
 
 	saveProposal(prpsl)
+	for i, txt := range input.OptionsList {
+		opt := dao.ProposalOption{Text: txt}
+		saveProposalOption(prpsl.ID, uint32(i), &opt)
+	}
 	setCount(ProposalsCount, id+1)
-	emitProposalCreatedEvent(id, caller.String())
-	emitProposalStateChangedEvent(id, ProposalActive)
-	return strptr(fmt.Sprintf("proposal %d created", id))
+	emitProposalCreatedEvent(id, dao.AddressToString(callerAddr))
+	emitProposalStateChangedEvent(id, dao.ProposalActive)
+	result := strconv.FormatUint(id, 10)
+	return &result
 }
 
 // -----------------------------------------------------------------------------
@@ -182,15 +96,23 @@ func CreateProposal(payload *string) *string {
 // closed, or failed.
 //
 //go:wasmexport proposal_tally
-func TallyProposal(proposalId *uint64) *string {
-	prpsl := loadProposal(*proposalId)
+func TallyProposal(proposalId *string) *string {
+	if proposalId == nil || *proposalId == "" {
+		sdk.Abort("proposal ID is required")
+	}
+	id, err := strconv.ParseUint(*proposalId, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid proposal ID")
+	}
+	prpsl := loadProposal(id)
 	prj := loadProject(prpsl.ProjectID)
 
-	if prpsl.State != ProposalActive {
+	if prpsl.State != dao.ProposalActive {
 		sdk.Abort("proposal not active")
 	}
-	if time.Now().Unix() < prpsl.CreatedAt+int64(prpsl.DurationHours)*3600 {
-		sdk.Abort("proposal still running")
+	deadline := prpsl.CreatedAt + int64(prpsl.DurationHours)*3600
+	if nowUnix() < deadline {
+		sdk.Abort(fmt.Sprintf("proposal still running until %s", time.Unix(deadline, 0).UTC().Format(time.RFC3339)))
 	}
 
 	// find best option
@@ -199,23 +121,19 @@ func TallyProposal(proposalId *uint64) *string {
 	highestOptionId := -1
 	highestOptionValue := float64(0)
 
-	for i, opt := range prpsl.Options {
-		var optionSum float64
-		for _, v := range opt.Votes {
-			optionSum += v
-		}
+	opts := loadProposalOptions(prpsl.ID, prpsl.OptionCount)
+	for i, opt := range opts {
+		totalVotes += dao.AmountToFloat(opt.WeightTotal)
+		voterCount += opt.VoterCount
 
-		totalVotes += optionSum              // sum all votes across options
-		voterCount += uint64(len(opt.Votes)) // count how many votes were cast for this option
-
-		if optionSum > highestOptionValue {
-			highestOptionValue = optionSum
+		if dao.AmountToFloat(opt.WeightTotal) > highestOptionValue {
+			highestOptionValue = dao.AmountToFloat(opt.WeightTotal)
 			highestOptionId = i
 		}
 	}
 
 	// default to failed
-	prpsl.State = ProposalFailed
+	prpsl.State = dao.ProposalFailed
 
 	if highestOptionId >= 0 && highestOptionValue > 0 {
 		// calculate quorum threshold (round up)
@@ -223,14 +141,15 @@ func TallyProposal(proposalId *uint64) *string {
 		// Check quorum
 		quorumMet := voterCount >= quorumThreshold
 		// Check threshold (fraction of total stake at creation)
-		thresholdMet := (highestOptionValue / prpsl.StakeSnapshot) >= prj.Config.ThresholdPercent/100
+		denom := dao.AmountToFloat(prpsl.StakeSnapshot)
+		thresholdMet := denom > 0 && (highestOptionValue/denom) >= prj.Config.ThresholdPercent/100
 
 		if quorumMet && thresholdMet {
-			prpsl.ResultOptionId = highestOptionId
+			prpsl.ResultOptionID = int32(highestOptionId)
 			if prpsl.IsPoll && highestOptionId == 1 {
-				prpsl.State = ProposalPassed // make it executable
+				prpsl.State = dao.ProposalPassed // make it executable
 			} else {
-				prpsl.State = ProposalClosed // just close
+				prpsl.State = dao.ProposalClosed // just close
 			}
 		}
 	}
@@ -254,90 +173,122 @@ func ExecuteProposal(proposalID *uint64) *string {
 	if prj.Paused {
 		sdk.Abort("project is paused")
 	}
-	if prpsl.State != ProposalPassed {
+	if prpsl.State != dao.ProposalPassed {
 		sdk.Abort(fmt.Sprintf("proposal is %s", prpsl.State))
 	}
 	fundsTransferred := false
+	configChanged := false
+	stateChanged := false
 	metaChanged := false
-	if prpsl.ProposalOutcome != nil {
-		if prpsl.ProposalOutcome.Payout != nil {
+	if prpsl.Outcome != nil {
+		if prpsl.Outcome.Payout != nil {
 			totalAsked := float64(0)
-			for _, stake := range prpsl.ProposalOutcome.Payout {
-				totalAsked += stake
+			for _, stake := range prpsl.Outcome.Payout {
+				totalAsked += dao.AmountToFloat(stake)
 			}
-			if prj.Funds < totalAsked {
+			if dao.AmountToFloat(prj.Funds) < totalAsked {
 				sdk.Abort("insufficient funds")
 			}
-			for addr, amount := range prpsl.ProposalOutcome.Payout {
-				mAmount := int64(amount * 1000)
+			for addr, amount := range prpsl.Outcome.Payout {
+				mAmount := dao.AmountToInt64(amount)
 				prj.Funds -= amount
-				sdk.HiveTransfer(addr, mAmount, sdk.Asset(prj.FundsAsset))
-				emitFundsRemoved(prj.ID, addr.String(), amount, prj.FundsAsset.String(), false)
+				sdk.HiveTransfer(sdk.Address(dao.AddressToString(addr)), mAmount, sdk.Asset(dao.AssetToString(prj.FundsAsset)))
+				emitFundsRemoved(prj.ID, dao.AddressToString(addr), dao.AmountToFloat(amount), dao.AssetToString(prj.FundsAsset), false)
 				fundsTransferred = true
 
 			}
 		}
-		if prpsl.ProposalOutcome.Meta != nil {
+		if prpsl.Outcome.Meta != nil {
 			// meta change
-			for action, value := range prpsl.ProposalOutcome.Meta {
+			for action, value := range prpsl.Outcome.Meta {
 				switch action {
 				// todo: add more
 				case "update_threshold":
-					var v float64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseFloat(value, 64)
+					if err != nil {
+						sdk.Abort("invalid threshold update")
+					}
 					prj.Config.ThresholdPercent = v
 					metaChanged = true
+					configChanged = true
 				case "update_quorum":
-					var v float64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseFloat(value, 64)
+					if err != nil {
+						sdk.Abort("invalid quorum update")
+					}
 					prj.Config.QuorumPercent = v
 					metaChanged = true
+					configChanged = true
 				case "update_proposalDuration":
-					var v uint64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseUint(value, 10, 64)
+					if err != nil {
+						sdk.Abort("invalid proposal duration update")
+					}
 					prj.Config.ProposalDurationHours = v
 					metaChanged = true
+					configChanged = true
 				case "update_executionDelay":
-					var v uint64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseUint(value, 10, 64)
+					if err != nil {
+						sdk.Abort("invalid execution delay update")
+					}
 					prj.Config.ExecutionDelayHours = v
 					metaChanged = true
+					configChanged = true
 				case "update_leaveCooldown":
-					var v uint64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseUint(value, 10, 64)
+					if err != nil {
+						sdk.Abort("invalid leave cooldown update")
+					}
 					prj.Config.LeaveCooldownHours = v
 					metaChanged = true
+					configChanged = true
 				case "update_proposalCost":
-					var v float64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseFloat(value, 64)
+					if err != nil {
+						sdk.Abort("invalid proposal cost update")
+					}
 					prj.Config.ProposalCost = v
 					metaChanged = true
+					configChanged = true
 				case "update_membershipNFT":
-					var v uint64
-					_ = json.Unmarshal([]byte(value), &v)
+					v, err := strconv.ParseUint(value, 10, 64)
+					if err != nil {
+						sdk.Abort("invalid membership nft update")
+					}
 					prj.Config.MembershipNFT = &v
 					metaChanged = true
+					configChanged = true
 				case "update_membershipNFTContract":
-					var v string
-					_ = json.Unmarshal([]byte(value), &v)
+					v := value
 					prj.Config.MembershipNFTContract = &v
 					metaChanged = true
+					configChanged = true
 				case "update_membershipNFTContractFunction":
-					var v string
-					_ = json.Unmarshal([]byte(value), &v)
+					v := value
 					prj.Config.MembershipNFTContractFunction = &v
 					metaChanged = true
+					configChanged = true
 				case "toggle_pause":
 					prj.Paused = !prj.Paused
 					metaChanged = true
+					stateChanged = true
 				}
 			}
 		}
 	}
 
-	prpsl.State = ProposalExecuted
+	prpsl.State = dao.ProposalExecuted
 	saveProposal(prpsl)
-	saveProject(prj)
+	if fundsTransferred {
+		saveProjectFinance(prj)
+	}
+	if configChanged {
+		saveProjectConfig(prj)
+	}
+	if stateChanged {
+		saveProjectMeta(prj)
+	}
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	if metaChanged {
 		emitProposalResultEvent(prj.ID, prpsl.ID, "meta changed")
@@ -353,23 +304,23 @@ func ExecuteProposal(proposalID *uint64) *string {
 // -----------------------------------------------------------------------------
 
 // saveProposal persists a proposal in contract state.
-func saveProposal(prpsl *Proposal) {
+func saveProposal(prpsl *dao.Proposal) {
 	key := proposalKey(prpsl.ID)
-	b := ToJSON(prpsl, "proposal")
-	sdk.StateSetObject(key, b)
+	data := dao.EncodeProposal(prpsl)
+	sdk.StateSetObject(key, string(data))
 }
 
 // loadProposal retrieves a proposal from contract state by ID.
 // Aborts if not found or if unmarshalling fails.
-func loadProposal(id uint64) *Proposal {
+func loadProposal(id uint64) *dao.Proposal {
 	key := proposalKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
-		sdk.Abort("proposal not found")
+		sdk.Abort(fmt.Sprintf("proposal %d not found", id))
 	}
-	var prpsl Proposal
-	if err := json.Unmarshal([]byte(*ptr), &prpsl); err != nil {
-		sdk.Abort("failed to unmarshal proposal")
+	prpsl, err := dao.DecodeProposal([]byte(*ptr))
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("failed to decode proposal: %v", err))
 	}
-	return &prpsl
+	return prpsl
 }

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
+	"math"
+	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
-	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -12,7 +15,12 @@ import (
 // proposalVoteKey generates a unique storage key for a vote
 // based on the proposal ID and the voter's address.
 func proposalVoteKey(id uint64, voter sdk.Address) string {
-	return "v:" + UInt64ToString(id) + ":" + voter.String()
+	addr := voter.String()
+	buf := make([]byte, 0, 1+8+len(addr))
+	buf = append(buf, kVoteReceipt)
+	buf = packU64LE(id, buf)
+	buf = append(buf, addr...)
+	return string(buf)
 }
 
 // hasVoted checks whether a voter has already cast a vote
@@ -26,22 +34,23 @@ func hasVoted(id uint64, voter sdk.Address) bool {
 // saveVote persists a voter's choices and voting weight
 // for a specific proposal.
 func saveVote(id uint64, voter sdk.Address, choices []uint, weight float64) {
-	// save vote
-	voteData := map[string]interface{}{
-		"choices": choices,
-		"weight":  weight,
-	}
-	sdk.StateSetObject(proposalVoteKey(id, voter), ToJSON(voteData, "vote"))
+	data := encodeVoteRecord(choices, weight)
+	sdk.StateSetObject(proposalVoteKey(id, voter), data)
 }
 
-// VoteProposalArgs defines the JSON payload required to cast a vote.
-//
-// Fields:
-//   - ProposalId: The ID of the proposal being voted on.
-//   - Choices: A slice of option indices being voted for.
-type VoteProposalArgs struct {
-	ProposalId uint64 `json:"id"`
-	Choices    []uint `json:"choices"` // TODO: add test for -1 as option
+func encodeVoteRecord(choices []uint, weight float64) string {
+	var buf bytes.Buffer
+	var tmp [binary.MaxVarintLen64]byte
+	count := binary.PutUvarint(tmp[:], uint64(len(choices)))
+	buf.Write(tmp[:count])
+	for _, choice := range choices {
+		n := binary.PutUvarint(tmp[:], uint64(choice))
+		buf.Write(tmp[:n])
+	}
+	var floatBuf [8]byte
+	binary.BigEndian.PutUint64(floatBuf[:], math.Float64bits(weight))
+	buf.Write(floatBuf[:])
+	return buf.String()
 }
 
 // VoteProposal allows a member of a project to cast a vote on an active proposal.
@@ -49,20 +58,21 @@ type VoteProposalArgs struct {
 //
 //go:wasmexport proposals_vote
 func VoteProposal(payload *string) *string {
-	input := FromJSON[VoteProposalArgs](*payload, "VoteProposalArgs")
-	prpsl := loadProposal(input.ProposalId)
+	input := decodeVoteProposalArgs(payload)
+	prpsl := loadProposal(input.ProposalID)
 
-	if prpsl.State != ProposalActive {
+	if prpsl.State != dao.ProposalActive {
 		sdk.Abort("proposal not active")
 	}
-	if time.Now().Unix() > prpsl.CreatedAt+int64(prpsl.DurationHours)*3600 {
+	if nowUnix() > prpsl.CreatedAt+int64(prpsl.DurationHours)*3600 {
 		sdk.Abort("proposal expired")
 	}
 
 	prj := loadProject(prpsl.ProjectID)
 	voter := getSenderAddress()
-	member := getMember(voter, prj.Members)
-	if hasVoted(input.ProposalId, voter) {
+	voterAddr := dao.AddressFromString(voter.String())
+	member := getMember(prj.ID, voterAddr)
+	if hasVoted(input.ProposalID, voter) {
 		sdk.Abort("already voted")
 	}
 	// check if member joined after proposal
@@ -71,22 +81,30 @@ func VoteProposal(payload *string) *string {
 	}
 
 	// check if stakemin is still the same (it can get modified by proposals)
-	if prj.Config.StakeMinAmt > member.Stake {
+	if prj.Config.StakeMinAmt > dao.AmountToFloat(member.Stake) {
 		sdk.Abort("minimum stake has changed since membership - increase stake")
 	}
 
 	weight := member.Stake
 
 	// check if all voted options are valid
+	seen := map[uint]bool{}
 	for _, idx := range input.Choices {
-		if idx >= uint(len(prpsl.Options)) {
+		if idx >= uint(prpsl.OptionCount) {
 			sdk.Abort("invalid option index")
 		}
-		prpsl.Options[idx].Votes = append(prpsl.Options[idx].Votes, weight)
+		// avoid double-counting same option in one vote
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		option := loadProposalOption(prpsl.ID, uint32(idx))
+		option.WeightTotal += weight
+		option.VoterCount++
+		saveProposalOption(prpsl.ID, uint32(idx), option)
 	}
 
-	saveVote(input.ProposalId, voter, input.Choices, weight)
-	saveProposal(prpsl)
-	emitVoteCasted(input.ProposalId, voter.String(), input.Choices, weight)
+	saveVote(input.ProposalID, voter, input.Choices, dao.AmountToFloat(weight))
+	emitVoteCasted(input.ProposalID, dao.AddressToString(voterAddr), input.Choices, dao.AmountToFloat(weight))
 	return strptr("voted")
 }

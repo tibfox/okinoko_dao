@@ -6,3 +6,4 @@ hiveConfig.json
 identityConfig.json
 data/
 artifacts/
+.cache/

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 
 	"vsc-node/lib/test_utils"
@@ -19,6 +20,7 @@ var _ = embed.FS{} // just so "embed" can be imported
 
 const ContractID = "vsctestcontract"
 const ownerAddress = "hive:tibfox"
+const defaultTimestamp = "2025-09-03T00:00:00"
 
 //go:embed artifacts/main.wasm
 var ContractWasm []byte
@@ -29,7 +31,8 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct := test_utils.NewContractTest()
 	ct.RegisterContract(ContractID, ownerAddress, ContractWasm)
 	ct.Deposit("hive:someone", 2000, ledgerDb.AssetHive)
-	ct.Deposit("hive:someoneelse", 1000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someoneelse", 2000, ledgerDb.AssetHive)
+	ct.Deposit("hive:member2", 2000, ledgerDb.AssetHive)
 	return &ct
 }
 
@@ -43,6 +46,20 @@ func CleanBadgerDB() {
 
 // CallContract executes a contract action and asserts basic success
 func CallContract(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint) (stateEngine.TxResult, uint, map[string][]string) {
+	return callContractWithTimestamp(t, ct, action, payload, intents, authUser, expectedResult, maxGas, defaultTimestamp)
+}
+
+func CallContractAt(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (stateEngine.TxResult, uint, map[string][]string) {
+	if timestamp == "" {
+		timestamp = defaultTimestamp
+	}
+	return callContractWithTimestamp(t, ct, action, payload, intents, authUser, expectedResult, maxGas, timestamp)
+}
+
+func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (stateEngine.TxResult, uint, map[string][]string) {
+	if timestamp == "" {
+		timestamp = defaultTimestamp
+	}
 	fmt.Println(action)
 	result, gasUsed, logs := ct.Call(stateEngine.TxVscCallContract{
 		Caller: authUser,
@@ -52,7 +69,7 @@ func CallContract(t *testing.T, ct *test_utils.ContractTest, action string, payl
 			BlockId:              "block1",
 			Index:                0,
 			OpIndex:              0,
-			Timestamp:            "2025-09-03T00:00:00",
+			Timestamp:            timestamp,
 			RequiredAuths:        []string{authUser},
 			RequiredPostingAuths: []string{},
 		},
@@ -68,6 +85,7 @@ func CallContract(t *testing.T, ct *test_utils.ContractTest, action string, payl
 	fmt.Printf("return msg: %s\n", result.Ret)
 	fmt.Printf("gas used: %d\n", gasUsed)
 	fmt.Printf("gas max : %d\n", maxGas)
+	fmt.Printf("RC used : %d\n", result.RcUsed)
 
 	assert.LessOrEqual(t, gasUsed, maxGas, fmt.Sprintf("Gas %d exceeded limit %d", gasUsed, maxGas))
 
@@ -95,43 +113,11 @@ func PrintErrorIfFailed(result stateEngine.TxResult) {
 	}
 }
 
-// ToJSONRaw converts Go objects to json.RawMessage
-func ToJSONRaw(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("failed to marshal JSON: %v", err))
-	}
-	return b
+// Payload helpers convert encoded bytes to contract payloads.
+func PayloadString(val string) json.RawMessage {
+	return json.RawMessage([]byte(strconv.Quote(val)))
 }
 
-// PayloadToJSON safely converts payloads to json.RawMessage
-func PayloadToJSON(v any) json.RawMessage {
-	switch val := v.(type) {
-	case string:
-		return json.RawMessage([]byte(val)) // no quoting
-	case json.RawMessage:
-		return val
-	default:
-		return ToJSONRaw(val) // fallback to normal marshaling
-	}
-}
-
-type ContractTestCase struct {
-	Name          string
-	Action        string
-	Payload       any
-	Intents       []contracts.Intent
-	ExpectLogs    bool
-	AuthUser      string
-	ExpectSuccess bool
-}
-
-// for table-driven tests
-func RunContractTests(t *testing.T, ct *test_utils.ContractTest, tests []ContractTestCase) {
-	for _, tt := range tests {
-		tt := tt // capture range variable
-		t.Run(tt.Name, func(t *testing.T) {
-			CallContract(t, ct, tt.Action, PayloadToJSON(tt.Payload), tt.Intents, tt.AuthUser, tt.ExpectSuccess, uint(100_000_000))
-		})
-	}
+func PayloadUint64(val uint64) json.RawMessage {
+	return json.RawMessage([]byte(strconv.FormatUint(val, 10)))
 }

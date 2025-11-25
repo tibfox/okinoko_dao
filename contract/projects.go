@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
+	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
-	"time"
+	"strconv"
 )
 
 const (
@@ -16,74 +17,6 @@ const (
 	FallbackLeaveCooldownHours    = 24
 	FallbackProposalCost          = 1
 )
-
-// CreateProjectArgs defines the JSON payload for creating a project.
-//
-// Fields:
-//   - Name: Name of the project. (TODO: enforce max length)
-//   - ProjectConfig: Configuration settings for the project.
-//   - Description: Description of the project. (TODO: enforce max length)
-//   - JsonMetadata: Optional metadata for extensibility. (TODO: enforce max size/length)
-type CreateProjectArgs struct {
-	Name          string         `json:"name"`
-	ProjectConfig ProjectConfig  `json:"config"`
-	Description   string         `json:"desc"`
-	JsonMetadata  map[string]any `json:"jsonMeta,omitempty"`
-}
-
-// ProjectConfig contains the parameters and toggles that define project rules.
-//
-// Fields include thresholds for voting, quorum, cooldowns, and staking rules.
-type ProjectConfig struct {
-	VotingSystem                  VotingSystem `json:"votingSystem"`              // democratic or stake-based voting
-	ThresholdPercent              float64      `json:"threshold"`                 // minimum % an answer needs to be valid
-	QuorumPercent                 float64      `json:"quorum"`                    // minimum % of votes required for a valid result
-	ProposalDurationHours         uint64       `json:"proposalDurationHours"`     // proposal lifetime until tally
-	ExecutionDelayHours           uint64       `json:"executionDelay"`            // delay between tally and execution
-	LeaveCooldownHours            uint64       `json:"leaveCooldown"`             // cooldown for member exits
-	ProposalCost                  float64      `json:"proposalCost"`              // minimum transfer required to create a proposal
-	StakeMinAmt                   float64      `json:"minStake"`                  // minimum transfer for membership in stake-based projects
-	MembershipNFTContract         *string      `json:"memberNFTContract"`         // NFT Members: contract address (optional)
-	MembershipNFTContractFunction *string      `json:"memberNFTContractFunction"` // NFT Members: contract function (optional)
-	MembershipNFT                 *uint64      `json:"memberNFT"`                 // NFT Members: required for membership (optional)
-
-}
-
-// VotingSystem defines how votes are weighted within a project.
-type VotingSystem string
-
-const (
-	// SystemDemocratic assigns equal weight to all members.
-	SystemDemocratic VotingSystem = "democratic"
-
-	// SystemStake assigns vote weight based on the member's stake.
-	SystemStake VotingSystem = "stake"
-)
-
-// Project represents a DAO project with members, configuration, and funds.
-type Project struct {
-	ID           uint64                 `json:"id"`
-	Owner        sdk.Address            `json:"owner"`
-	Name         string                 `json:"name"`
-	Description  string                 `json:"desc"`
-	Config       ProjectConfig          `json:"config"`
-	Funds        float64                `json:"funds"`
-	FundsAsset   sdk.Asset              `json:"fundsAsset"`
-	Members      map[sdk.Address]Member `json:"members"`
-	Paused       bool                   `json:"paused"`
-	Tx           string                 `json:"tx"`
-	JsonMetadata map[string]any         `json:"jsonMeta,omitempty"`
-}
-
-// Member represents a participant in a project, including stake and activity metadata.
-type Member struct {
-	Address       sdk.Address `json:"address"`
-	Stake         float64     `json:"stake"`
-	JoinedAt      int64       `json:"joinedAt"`
-	LastActionAt  int64       `json:"lastActionAt"`
-	ExitRequested int64       `json:"exitRequested"`
-	Reputation    int64       `json:"reputation"`
-}
 
 // Permission defines access rights for actions within a project.
 type Permission string
@@ -104,87 +37,82 @@ const (
 //
 //go:wasmexport project_create
 func CreateProject(payload *string) *string {
-	input := FromJSON[CreateProjectArgs](*payload, "CreateProjectArgs")
+	input := decodeCreateProjectArgs(payload)
 
 	caller := getSenderAddress()
+	callerAddr := dao.Address(caller)
+	callerStr := caller.String()
 
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow()
 	if ta == nil {
 		sdk.Abort("no valid transfer intent provided")
 	}
+	tokenStr := ta.Token.String()
 
 	// determine required initial stake
-	var initialTrasurey float64
-	if input.ProjectConfig.VotingSystem == "" {
-		input.ProjectConfig.VotingSystem = SystemStake
-	}
-
-	if input.ProjectConfig.StakeMinAmt <= 0 {
-		input.ProjectConfig.StakeMinAmt = ta.Limit
-	} else {
-		if input.ProjectConfig.StakeMinAmt > ta.Limit {
-			sdk.Abort(fmt.Sprintf("transfer limit %f < StakeMinAmt %f", ta.Limit, input.ProjectConfig.StakeMinAmt))
-		} else {
-			initialTrasurey = ta.Limit - input.ProjectConfig.StakeMinAmt
+	stakeLimit := ta.Limit
+	stakeMin := stakeLimit
+	if input.ProjectConfig.StakeMinAmt > 0 {
+		stakeMin = input.ProjectConfig.StakeMinAmt
+		if stakeMin > stakeLimit {
+			sdk.Abort(fmt.Sprintf("transfer limit %f < StakeMinAmt %f", stakeLimit, stakeMin))
 		}
+	} else {
+		input.ProjectConfig.StakeMinAmt = stakeLimit
 	}
+	initialTrasurey := stakeLimit - stakeMin
 
 	// --- create project ---
 	id := getCount(ProjectsCount)
-	now := time.Now().Unix()
-
-	if input.ProjectConfig.ThresholdPercent <= 0 {
-		input.ProjectConfig.ThresholdPercent = FallbackThresholdPercent
-	}
-	if input.ProjectConfig.QuorumPercent <= 0 {
-		input.ProjectConfig.QuorumPercent = FallbackQuorumPercent
-	}
-	if input.ProjectConfig.ProposalDurationHours <= 0 {
-		input.ProjectConfig.ProposalDurationHours = FallbackProposalDurationHours
-	}
-	if input.ProjectConfig.ExecutionDelayHours <= 0 {
-		input.ProjectConfig.ExecutionDelayHours = FallbackExecutionDelayHours
-	}
-	if input.ProjectConfig.LeaveCooldownHours <= 0 {
-		input.ProjectConfig.LeaveCooldownHours = FallbackLeaveCooldownHours
-	}
-	if input.ProjectConfig.ProposalCost <= 0 {
-		input.ProjectConfig.ProposalCost = FallbackProposalCost
+	now := nowUnix()
+	txPtr := sdk.GetEnvKey("tx.id")
+	txID := ""
+	if txPtr != nil {
+		txID = *txPtr
 	}
 
-	prj := Project{
-		ID:           id,
-		Owner:        caller,
-		Name:         input.Name,
-		Description:  input.Description,
-		Config:       input.ProjectConfig,
-		JsonMetadata: input.JsonMetadata,
-		Funds:        initialTrasurey,
-		FundsAsset:   ta.Token,
-		Members:      map[sdk.Address]Member{},
-		Paused:       false,
-		Tx:           *sdk.GetEnvKey("tx.id"),
-	}
+	stakeAmount := dao.FloatToAmount(ta.Limit - initialTrasurey)
+	treasuryAmount := dao.FloatToAmount(initialTrasurey)
+	depositAmount := stakeAmount + treasuryAmount
 
-	prj.Members[caller] = Member{
-		Address:      caller,
-		Stake:        ta.Limit - initialTrasurey,
+	prj := dao.Project{
+		ID:          id,
+		Owner:       callerAddr,
+		Name:        input.Name,
+		Description: input.Description,
+		Metadata:    input.Metadata,
+		Funds:       treasuryAmount,
+		FundsAsset:  dao.Asset(ta.Token),
+		Paused:      false,
+		Tx:          txID,
+		StakeTotal:  stakeAmount,
+		MemberCount: 1,
+	}
+	prj.Config = input.ProjectConfig
+
+	creatorMember := dao.Member{
+		Address:      callerAddr,
+		Stake:        stakeAmount,
 		JoinedAt:     now,
 		LastActionAt: now,
 		Reputation:   0,
 	}
 	// draw the funds
-	mAmount := int64(ta.Limit * 1000)
+	mAmount := dao.AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
+	saveMember(prj.ID, &creatorMember)
 	// save project
 	saveProject(&prj)
 	setCount(ProjectsCount, id+1)
 
-	emitProjectCreatedEvent(id, caller.String())
-	emitFundsAdded(prj.ID, caller.String(), ta.Limit-initialTrasurey, ta.Token.String(), true)
-	emitFundsAdded(prj.ID, caller.String(), initialTrasurey, ta.Token.String(), false)
-	return strptr(fmt.Sprintf("project %d created", id))
+	emitProjectCreatedEvent(id, callerStr)
+	stakeAmountFloat := dao.AmountToFloat(stakeAmount)
+	treasuryAmountFloat := dao.AmountToFloat(treasuryAmount)
+	emitFundsAdded(prj.ID, callerStr, stakeAmountFloat, tokenStr, true)
+	emitFundsAdded(prj.ID, callerStr, treasuryAmountFloat, tokenStr, false)
+	result := strconv.FormatUint(id, 10)
+	return &result
 }
 
 // JoinProject allows a caller to join an existing project
@@ -192,14 +120,22 @@ func CreateProject(payload *string) *string {
 // an NFT depending on project configuration.
 //
 //go:wasmexport project_join
-func JoinProject(projectID *uint64) *string {
-	prj := loadProject(*projectID)
+func JoinProject(projectID *string) *string {
+	if projectID == nil || *projectID == "" {
+		sdk.Abort("project ID is required")
+	}
+	id, err := strconv.ParseUint(*projectID, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid project ID")
+	}
+	prj := loadProject(id)
 	if prj.Paused {
 		sdk.Abort("project paused")
 	}
 	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
 
-	if _, exists := prj.Members[caller]; exists {
+	if _, exists := loadMember(prj.ID, callerAddr); exists {
 		sdk.Abort("already a member")
 	}
 
@@ -216,7 +152,7 @@ func JoinProject(projectID *uint64) *string {
 		if nftFunction == nil {
 			nftFunction = strptr(FallbackNFTFunction)
 		}
-		payload := UInt64ToString(*prj.Config.MembershipNFT) + "|" + caller.String()
+		payload := UInt64ToString(*prj.Config.MembershipNFT) + "|" + dao.AddressToString(callerAddr)
 
 		editions := sdk.ContractCall(
 			*nftContract,
@@ -233,28 +169,31 @@ func JoinProject(projectID *uint64) *string {
 		sdk.Abort("no valid transfer intent provided")
 	}
 
-	if ta.Limit != prj.Config.StakeMinAmt && prj.Config.VotingSystem == SystemDemocratic {
+	if ta.Limit != prj.Config.StakeMinAmt && prj.Config.VotingSystem == dao.VotingSystemDemocratic {
 		sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
 	}
 
-	if ta.Limit < prj.Config.StakeMinAmt && prj.Config.VotingSystem == SystemStake {
+	if ta.Limit < prj.Config.StakeMinAmt && prj.Config.VotingSystem == dao.VotingSystemStake {
 		sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
 	}
-	now := time.Now().Unix()
+	now := nowUnix()
 
-	prj.Members[caller] = Member{
-		Address:      caller,
-		Stake:        ta.Limit,
+	depositAmount := dao.FloatToAmount(ta.Limit)
+	newMember := dao.Member{
+		Address:      callerAddr,
+		Stake:        depositAmount,
 		JoinedAt:     now,
 		LastActionAt: now,
 	}
+	saveMember(prj.ID, &newMember)
+	prj.MemberCount++
+	prj.StakeTotal += depositAmount
 	// draw the funds
-	mAmount := int64(ta.Limit * 1000)
+	mAmount := dao.AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
-	// save project
-	saveProject(prj)
-	emitJoinedEvent(prj.ID, caller.String())
-	emitFundsAdded(prj.ID, caller.String(), ta.Limit, ta.Token.String(), true)
+	saveProjectFinance(prj)
+	emitJoinedEvent(prj.ID, dao.AddressToString(callerAddr))
+	emitFundsAdded(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(depositAmount), ta.Token.String(), true)
 	return strptr("joined")
 }
 
@@ -264,21 +203,18 @@ func JoinProject(projectID *uint64) *string {
 //go:wasmexport project_leave
 func LeaveProject(projectID *uint64) *string {
 	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
 	prj := loadProject(*projectID)
 	if prj.Paused {
 		sdk.Abort("project paused")
 	}
 
-	member, ok := prj.Members[caller]
-	if !ok {
-		sdk.Abort("not a member")
-	}
+	member := getMember(prj.ID, callerAddr)
 
-	now := time.Now().Unix()
+	now := nowUnix()
 	if member.ExitRequested == 0 {
 		member.ExitRequested = now
-		prj.Members[caller] = member
-		saveProject(prj)
+		saveMember(prj.ID, &member)
 		return strptr("exit requested")
 	}
 	if now-member.ExitRequested < int64(prj.Config.LeaveCooldownHours*3600) {
@@ -287,20 +223,18 @@ func LeaveProject(projectID *uint64) *string {
 
 	// refund stake
 	withdraw := member.Stake
-	mAmount := int64(withdraw * 1000)
-	sdk.HiveTransfer(caller, mAmount, prj.FundsAsset)
+	mAmount := dao.AmountToInt64(withdraw)
+	sdk.HiveTransfer(caller, mAmount, sdk.Asset(dao.AssetToString(prj.FundsAsset)))
 
-	delete(prj.Members, caller)
-	saveProject(prj)
-	emitLeaveEvent(prj.ID, caller.String())
-	emitFundsRemoved(prj.ID, caller.String(), withdraw, prj.FundsAsset.String(), true)
+	deleteMember(prj.ID, callerAddr)
+	if prj.MemberCount > 0 {
+		prj.MemberCount--
+	}
+	prj.StakeTotal -= withdraw
+	saveProjectFinance(prj)
+	emitLeaveEvent(prj.ID, dao.AddressToString(callerAddr))
+	emitFundsRemoved(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(withdraw), dao.AssetToString(prj.FundsAsset), true)
 	return strptr("exit finished")
-}
-
-// AddFundsArgs defines the JSON payload for adding funds to a project.
-type AddFundsArgs struct {
-	ProjectId uint64 `json:"id"`
-	ToStake   bool   `json:"toStake"`
 }
 
 // AddFunds transfers additional tokens to a project.
@@ -309,9 +243,10 @@ type AddFundsArgs struct {
 //
 //go:wasmexport project_funds
 func AddFunds(payload *string) *string {
-	input := FromJSON[AddFundsArgs](*payload, "AddFundsArgs")
-	prj := loadProject(input.ProjectId)
+	input := decodeAddFundsArgs(payload)
+	prj := loadProject(input.ProjectID)
 	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
 
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow()
@@ -320,44 +255,46 @@ func AddFunds(payload *string) *string {
 	}
 
 	// validate intent token matches project treasury asset
-	if ta.Token != prj.FundsAsset {
-		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", prj.FundsAsset.String()))
+	asset := dao.AssetFromString(ta.Token.String())
+	if asset != prj.FundsAsset {
+		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
 	}
 
 	// draw the funds
-	mAmount := int64(ta.Limit * 1000)
+	depositAmount := dao.FloatToAmount(ta.Limit)
+	mAmount := dao.AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
 
 	if input.ToStake {
-		if prj.Config.VotingSystem == SystemDemocratic {
+		if prj.Config.VotingSystem == dao.VotingSystemDemocratic {
 			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
 		} else {
-			member := getMember(caller, prj.Members)
-			member.Stake += ta.Limit
-			member.LastActionAt = time.Now().Unix()
-			prj.Members[caller] = member
+			member := getMember(prj.ID, callerAddr)
+			member.Stake += depositAmount
+			member.LastActionAt = nowUnix()
+			saveMember(prj.ID, &member)
+			prj.StakeTotal += depositAmount
 		}
 
 	} else {
 		// add to treasury for payouts
-		prj.Funds += ta.Limit
+		prj.Funds += depositAmount
 
 	}
 
-	saveProject(prj)
-	emitFundsAdded(prj.ID, caller.String(), ta.Limit, ta.Token.String(), input.ToStake)
+	saveProjectFinance(prj)
+	emitFundsAdded(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(depositAmount), ta.Token.String(), input.ToStake)
 	return strptr("funds added")
 }
 
 // getMember retrieves a member from the project's membership map.
 // Aborts if the given user is not a member.
-func getMember(user sdk.Address, members map[sdk.Address]Member) Member {
-	// update member stake
-	m, ok := members[user]
+func getMember(projectID uint64, user dao.Address) dao.Member {
+	member, ok := loadMember(projectID, user)
 	if !ok {
-		sdk.Abort(fmt.Sprintf("%s is not a member", user.String()))
+		sdk.Abort(fmt.Sprintf("%s is not a member", dao.AddressToString(user)))
 	}
-	return m
+	return *member
 }
 
 // TransferProjectOwnership changes project ownership to a new member.
@@ -366,17 +303,19 @@ func getMember(user sdk.Address, members map[sdk.Address]Member) Member {
 //go:wasmexport project_transfer
 func TransferProjectOwnership(projectID uint64, newOwner sdk.Address) {
 	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
+	newOwnerAddr := dao.AddressFromString(newOwner.String())
 	prj := loadProject(projectID)
-	if caller != prj.Owner {
+	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can transfer")
 	}
 
-	if _, ok := prj.Members[newOwner]; !ok {
+	if _, exists := loadMember(prj.ID, newOwnerAddr); !exists {
 		sdk.Abort("new owner must be a member")
 	}
 
-	prj.Owner = newOwner
-	saveProject(prj)
+	prj.Owner = newOwnerAddr
+	saveProjectMeta(prj)
 }
 
 // EmergencyPauseImmediate pauses or unpauses a project immediately.
@@ -385,27 +324,108 @@ func TransferProjectOwnership(projectID uint64, newOwner sdk.Address) {
 //go:wasmexport project_pause
 func EmergencyPauseImmediate(projectID uint64, pause bool) {
 	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
 	prj := loadProject(projectID)
-	if caller != prj.Owner {
+	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can pause/unpause")
 	}
 	prj.Paused = pause
-	saveProject(prj)
+	saveProjectMeta(prj)
 }
 
-// saveProject persists the given project state in contract storage.
-func saveProject(prj *Project) {
-	key := projectKey(prj.ID)
-	sdk.StateSetObject(key, ToJSON(prj, "project"))
+// saveProject persists all project parts (meta, config, finance).
+func saveProject(prj *dao.Project) {
+	saveProjectMeta(prj)
+	saveProjectConfig(prj)
+	saveProjectFinance(prj)
 }
 
 // loadProject retrieves a project from contract storage by ID.
 // Aborts if the project does not exist.
-func loadProject(id uint64) *Project {
+func loadProject(id uint64) *dao.Project {
+	meta := loadProjectMeta(id)
+	cfg := loadProjectConfig(id)
+	fin := loadProjectFinance(id)
+	return &dao.Project{
+		ID:          id,
+		Owner:       meta.Owner,
+		Name:        meta.Name,
+		Description: meta.Description,
+		Config:      *cfg,
+		Metadata:    meta.Metadata,
+		Funds:       fin.Funds,
+		FundsAsset:  fin.FundsAsset,
+		Paused:      meta.Paused,
+		Tx:          meta.Tx,
+		StakeTotal:  fin.StakeTotal,
+		MemberCount: fin.MemberCount,
+	}
+}
+
+func saveProjectMeta(prj *dao.Project) {
+	meta := dao.ProjectMeta{
+		Owner:       prj.Owner,
+		Name:        prj.Name,
+		Description: prj.Description,
+		Paused:      prj.Paused,
+		Tx:          prj.Tx,
+		Metadata:    prj.Metadata,
+	}
+	data := dao.EncodeProjectMeta(&meta)
+	stateSetIfChanged(projectKey(prj.ID), string(data))
+}
+
+func loadProjectMeta(id uint64) *dao.ProjectMeta {
 	key := projectKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
-		sdk.Abort("project not found")
+		sdk.Abort(fmt.Sprintf("project %d not found", id))
 	}
-	return FromJSON[Project](*ptr, "Project")
+	meta, err := dao.DecodeProjectMeta([]byte(*ptr))
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("failed to decode project meta: %v", err))
+	}
+	return meta
+}
+
+func saveProjectConfig(prj *dao.Project) {
+	data := dao.EncodeProjectConfig(&prj.Config)
+	stateSetIfChanged(projectConfigKey(prj.ID), string(data))
+}
+
+func loadProjectConfig(id uint64) *dao.ProjectConfig {
+	key := projectConfigKey(id)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		sdk.Abort("project config not found")
+	}
+	cfg, err := dao.DecodeProjectConfig([]byte(*ptr))
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("failed to decode project config: %v", err))
+	}
+	return cfg
+}
+
+func saveProjectFinance(prj *dao.Project) {
+	fin := dao.ProjectFinance{
+		Funds:       prj.Funds,
+		FundsAsset:  prj.FundsAsset,
+		StakeTotal:  prj.StakeTotal,
+		MemberCount: prj.MemberCount,
+	}
+	data := dao.EncodeProjectFinance(&fin)
+	stateSetIfChanged(projectFinanceKey(prj.ID), string(data))
+}
+
+func loadProjectFinance(id uint64) *dao.ProjectFinance {
+	key := projectFinanceKey(id)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		sdk.Abort("project finance not found")
+	}
+	fin, err := dao.DecodeProjectFinance([]byte(*ptr))
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("failed to decode project finance: %v", err))
+	}
+	return fin
 }
