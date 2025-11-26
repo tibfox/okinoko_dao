@@ -253,6 +253,7 @@ func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
 		}
 		cfg.MembershipNFT = &parsed
 	}
+	cfg.ProposalsMembersOnly = parseCreatorRestrictionField(get(14))
 	normalizeProjectConfig(&cfg)
 	args.ProjectConfig = cfg
 	return args
@@ -590,6 +591,22 @@ func parsePayoutField(val string) map[dao.Address]dao.Amount {
 		payouts[addr] = dao.FloatToAmount(amount)
 	}
 	return payouts
+}
+
+func parseCreatorRestrictionField(val string) bool {
+	val = strings.TrimSpace(strings.ToLower(val))
+	if val == "" {
+		return FallbackProposalCreatorsMembersOnly
+	}
+	switch val {
+	case "1", "true", "yes", "members":
+		return true
+	case "0", "false", "no", "public", "any":
+		return false
+	default:
+		sdk.Abort("invalid proposal creator restriction")
+	}
+	return true
 }
 
 // strptr returns a pointer to the provided string.

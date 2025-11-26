@@ -33,6 +33,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.Deposit("hive:someone", 2000, ledgerDb.AssetHive)
 	ct.Deposit("hive:someoneelse", 2000, ledgerDb.AssetHive)
 	ct.Deposit("hive:member2", 2000, ledgerDb.AssetHive)
+	ct.Deposit("hive:outsider", 2000, ledgerDb.AssetHive)
 	return &ct
 }
 

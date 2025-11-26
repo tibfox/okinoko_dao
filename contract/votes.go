@@ -76,7 +76,7 @@ func VoteProposal(payload *string) *string {
 		sdk.Abort("already voted")
 	}
 	// check if member joined after proposal
-	if prpsl.CreatedAt > member.JoinedAt {
+	if member.JoinedAt > prpsl.CreatedAt {
 		sdk.Abort("proposal was created before joining the project")
 	}
 

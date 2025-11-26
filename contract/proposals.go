@@ -24,9 +24,11 @@ func CreateProposal(payload *string) *string {
 		sdk.Abort("project is paused")
 	}
 
-	// Only members can create
-	if _, exists := loadMember(prj.ID, callerAddr); !exists {
-		sdk.Abort("only members can create proposals")
+	// Only members can create unless config allows public proposals
+	if prj.Config.ProposalsMembersOnly {
+		if _, exists := loadMember(prj.ID, callerAddr); !exists {
+			sdk.Abort("only members can create proposals")
+		}
 	}
 
 	isPoll := input.ForcePoll
@@ -97,10 +99,8 @@ func CreateProposal(payload *string) *string {
 //
 //go:wasmexport proposal_tally
 func TallyProposal(proposalId *string) *string {
-	if proposalId == nil || *proposalId == "" {
-		sdk.Abort("proposal ID is required")
-	}
-	id, err := strconv.ParseUint(*proposalId, 10, 64)
+	raw := unwrapPayload(proposalId, "proposal ID is required")
+	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
 		sdk.Abort("invalid proposal ID")
 	}
@@ -167,8 +167,13 @@ func TallyProposal(proposalId *string) *string {
 // in the proposal outcome.
 //
 //go:wasmexport proposal_execute
-func ExecuteProposal(proposalID *uint64) *string {
-	prpsl := loadProposal(*proposalID)
+func ExecuteProposal(proposalID *string) *string {
+	raw := unwrapPayload(proposalID, "proposal ID is required")
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid proposal ID")
+	}
+	prpsl := loadProposal(id)
 	prj := loadProject(prpsl.ProjectID)
 	if prj.Paused {
 		sdk.Abort("project is paused")
@@ -267,6 +272,10 @@ func ExecuteProposal(proposalID *uint64) *string {
 				case "update_membershipNFTContractFunction":
 					v := value
 					prj.Config.MembershipNFTContractFunction = &v
+					metaChanged = true
+					configChanged = true
+				case "update_proposalCreatorRestriction":
+					prj.Config.ProposalsMembersOnly = parseCreatorRestrictionField(value)
 					metaChanged = true
 					configChanged = true
 				case "toggle_pause":

@@ -79,6 +79,7 @@ type ProjectConfig struct {
 	MembershipNFTContract         *string
 	MembershipNFTContractFunction *string
 	MembershipNFT                 *uint64
+	ProposalsMembersOnly          bool
 }
 
 type Member struct {

@@ -5,17 +5,19 @@ import (
 	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 	"strconv"
+	"strings"
 )
 
 const (
-	FallbackNFTContract           = "TODO: set default nft contract"
-	FallbackNFTFunction           = "nft_hasNFTEdition"
-	FallbackThresholdPercent      = 50.001
-	FallbackQuorumPercent         = 50.001
-	FallbackProposalDurationHours = 24
-	FallbackExecutionDelayHours   = 4
-	FallbackLeaveCooldownHours    = 24
-	FallbackProposalCost          = 1
+	FallbackNFTContract                 = "TODO: set default nft contract"
+	FallbackNFTFunction                 = "nft_hasNFTEdition"
+	FallbackThresholdPercent            = 50.001
+	FallbackQuorumPercent               = 50.001
+	FallbackProposalDurationHours       = 24
+	FallbackExecutionDelayHours         = 4
+	FallbackLeaveCooldownHours          = 24
+	FallbackProposalCost                = 1
+	FallbackProposalCreatorsMembersOnly = true
 )
 
 // Permission defines access rights for actions within a project.
@@ -121,10 +123,8 @@ func CreateProject(payload *string) *string {
 //
 //go:wasmexport project_join
 func JoinProject(projectID *string) *string {
-	if projectID == nil || *projectID == "" {
-		sdk.Abort("project ID is required")
-	}
-	id, err := strconv.ParseUint(*projectID, 10, 64)
+	rawID := unwrapPayload(projectID, "project ID is required")
+	id, err := strconv.ParseUint(rawID, 10, 64)
 	if err != nil {
 		sdk.Abort("invalid project ID")
 	}
@@ -201,10 +201,15 @@ func JoinProject(projectID *string) *string {
 // A cooldown period applies before stake is refunded.
 //
 //go:wasmexport project_leave
-func LeaveProject(projectID *uint64) *string {
+func LeaveProject(projectID *string) *string {
+	raw := unwrapPayload(projectID, "project ID is required")
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid project ID")
+	}
 	caller := getSenderAddress()
 	callerAddr := dao.AddressFromString(caller.String())
-	prj := loadProject(*projectID)
+	prj := loadProject(id)
 	if prj.Paused {
 		sdk.Abort("project paused")
 	}
@@ -212,6 +217,9 @@ func LeaveProject(projectID *uint64) *string {
 	member := getMember(prj.ID, callerAddr)
 
 	now := nowUnix()
+	if hasActivePayout(prj.ID, callerAddr) {
+		sdk.Abort("active proposal requesting funds")
+	}
 	if member.ExitRequested == 0 {
 		member.ExitRequested = now
 		saveMember(prj.ID, &member)
@@ -235,6 +243,27 @@ func LeaveProject(projectID *uint64) *string {
 	emitLeaveEvent(prj.ID, dao.AddressToString(callerAddr))
 	emitFundsRemoved(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(withdraw), dao.AssetToString(prj.FundsAsset), true)
 	return strptr("exit finished")
+}
+
+func hasActivePayout(projectID uint64, member dao.Address) bool {
+	count := getCount(ProposalsCount)
+	for i := uint64(0); i < count; i++ {
+		ptr := sdk.StateGetObject(proposalKey(i))
+		if ptr == nil || *ptr == "" {
+			continue
+		}
+		prpsl, err := dao.DecodeProposal([]byte(*ptr))
+		if err != nil || prpsl.ProjectID != projectID {
+			continue
+		}
+		if prpsl.State != dao.ProposalActive || prpsl.Outcome == nil || prpsl.Outcome.Payout == nil {
+			continue
+		}
+		if _, ok := prpsl.Outcome.Payout[member]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // AddFunds transfers additional tokens to a project.
@@ -301,11 +330,28 @@ func getMember(projectID uint64, user dao.Address) dao.Member {
 // The caller must be the current owner, and the new owner must be a member.
 //
 //go:wasmexport project_transfer
-func TransferProjectOwnership(projectID uint64, newOwner sdk.Address) {
+func TransferProjectOwnership(payload *string) *string {
+	raw := unwrapPayload(payload, "transfer payload required")
+	parts := strings.Split(raw, "|")
+	if len(parts) < 2 {
+		sdk.Abort("transfer payload requires projectId|newOwner")
+	}
+	idStr := strings.TrimSpace(parts[0])
+	if idStr == "" {
+		sdk.Abort("project ID is required")
+	}
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid project ID")
+	}
+	newOwnerStr := strings.TrimSpace(parts[1])
+	if newOwnerStr == "" {
+		sdk.Abort("new owner address required")
+	}
 	caller := getSenderAddress()
 	callerAddr := dao.AddressFromString(caller.String())
-	newOwnerAddr := dao.AddressFromString(newOwner.String())
-	prj := loadProject(projectID)
+	newOwnerAddr := dao.AddressFromString(newOwnerStr)
+	prj := loadProject(id)
 	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can transfer")
 	}
@@ -316,21 +362,43 @@ func TransferProjectOwnership(projectID uint64, newOwner sdk.Address) {
 
 	prj.Owner = newOwnerAddr
 	saveProjectMeta(prj)
+	return strptr("ownership transferred")
 }
 
 // EmergencyPauseImmediate pauses or unpauses a project immediately.
 // Only the owner may invoke this action.
 //
 //go:wasmexport project_pause
-func EmergencyPauseImmediate(projectID uint64, pause bool) {
+func EmergencyPauseImmediate(payload *string) *string {
+	raw := unwrapPayload(payload, "pause payload required")
+	parts := strings.Split(raw, "|")
+	if len(parts) == 0 {
+		sdk.Abort("project ID is required")
+	}
+	idStr := strings.TrimSpace(parts[0])
+	if idStr == "" {
+		sdk.Abort("project ID is required")
+	}
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid project ID")
+	}
+	pause := true
+	if len(parts) > 1 {
+		pause = parseBoolField(parts[1])
+	}
 	caller := getSenderAddress()
 	callerAddr := dao.AddressFromString(caller.String())
-	prj := loadProject(projectID)
+	prj := loadProject(id)
 	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can pause/unpause")
 	}
 	prj.Paused = pause
 	saveProjectMeta(prj)
+	if pause {
+		return strptr("paused")
+	}
+	return strptr("unpaused")
 }
 
 // saveProject persists all project parts (meta, config, finance).
