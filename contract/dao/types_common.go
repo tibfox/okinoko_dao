@@ -48,6 +48,7 @@ const (
 	ProposalPassed           ProposalState = 3
 	ProposalExecuted         ProposalState = 4
 	ProposalFailed           ProposalState = 5
+	ProposalCancelled        ProposalState = 6
 )
 
 func (ps ProposalState) String() string {
@@ -62,6 +63,8 @@ func (ps ProposalState) String() string {
 		return "executed"
 	case ProposalFailed:
 		return "failed"
+	case ProposalCancelled:
+		return "cancelled"
 	default:
 		return "unspecified"
 	}
@@ -79,6 +82,7 @@ type ProjectConfig struct {
 	MembershipNFTContract         *string
 	MembershipNFTContractFunction *string
 	MembershipNFT                 *uint64
+	MembershipNftPayloadFormat    string
 	ProposalsMembersOnly          bool
 }
 
@@ -152,6 +156,7 @@ type Proposal struct {
 	IsPoll              bool
 	ResultOptionID      int32
 	OptionCount         uint32
+	ExecutableAt        int64
 }
 
 type CreateProjectArgs struct {

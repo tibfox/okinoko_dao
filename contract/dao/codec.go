@@ -114,6 +114,7 @@ func encodeProjectConfig(w *binWriter, cfg *ProjectConfig) {
 	w.writeOptionalString(cfg.MembershipNFTContract)
 	w.writeOptionalString(cfg.MembershipNFTContractFunction)
 	w.writeOptionalUint64(cfg.MembershipNFT)
+	w.writeString(cfg.MembershipNftPayloadFormat)
 	w.writeBool(cfg.ProposalsMembersOnly)
 }
 
@@ -198,6 +199,7 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeString(prpsl.Metadata)
 	w.writeBool(prpsl.IsPoll)
 	w.writeVarInt(int64(prpsl.ResultOptionID))
+	w.writeInt64(prpsl.ExecutableAt)
 	return w.bytes()
 }
 
@@ -424,6 +426,9 @@ func decodeProjectConfig(r *binReader) (ProjectConfig, error) {
 		return cfg, err
 	}
 	if cfg.MembershipNFT, err = r.readOptionalUint64(); err != nil {
+		return cfg, err
+	}
+	if cfg.MembershipNftPayloadFormat, err = r.readString(); err != nil {
 		return cfg, err
 	}
 	if cfg.ProposalsMembersOnly, err = r.readBool(); err != nil {
@@ -726,6 +731,9 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 	if v, err := r.readVarInt(); err == nil {
 		prpsl.ResultOptionID = int32(v)
 	} else {
+		return nil, err
+	}
+	if prpsl.ExecutableAt, err = r.readInt64(); err != nil {
 		return nil, err
 	}
 	return prpsl, nil

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"vsc-node/lib/test_utils"
 	"vsc-node/modules/db/vsc/contracts"
+	ledgerDb "vsc-node/modules/db/vsc/ledger"
 )
 
 func TestCreateProject(t *testing.T) {
@@ -118,15 +119,40 @@ func TestAddFundsRejectsWrongAsset(t *testing.T) {
 	}
 }
 
-func TestVoteDoubleSubmissionFails(t *testing.T) {
+func TestProjectJoinRejectsWrongAsset(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
-	proposalID := createSimpleProposal(t, ct, projectID, "2")
-	payload := PayloadString(fmt.Sprintf("%d|1", proposalID))
-	CallContract(t, ct, "proposals_vote", payload, nil, "hive:someone", true, uint(1_000_000_000))
-	res, _, _ := CallContract(t, ct, "proposals_vote", payload, nil, "hive:someone", false, uint(1_000_000_000))
-	if !strings.Contains(res.Ret, "already voted") {
-		t.Fatalf("expected duplicate vote rejection, got %q", res.Ret)
+	payload := PayloadString(strconv.FormatUint(projectID, 10))
+	res, _, _ := CallContract(t, ct, "project_join", payload, transferIntentWithToken("1.000", "hbd"), "hive:someoneelse", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "invalid asset") {
+		t.Fatalf("expected invalid asset rejection, got %q", res.Ret)
+	}
+}
+
+func TestAddStakeFundsRequiresMembership(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createProjectWithVoting(t, ct, "1")
+	payload := fmt.Sprintf("%d|true", projectID)
+	res, _, _ := CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.500"), "hive:outsider", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "is not a member") {
+		t.Fatalf("expected membership check, got %q", res.Ret)
+	}
+}
+
+func TestVoteCanBeUpdatedBeforeTally(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createPollProposal(t, ct, projectID, "1", "", "")
+	voteYes := PayloadString(fmt.Sprintf("%d|1", proposalID))
+	CallContract(t, ct, "proposals_vote", voteYes, nil, "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposals_vote", voteYes, nil, "hive:someoneelse", true, uint(1_000_000_000))
+	voteNo := PayloadString(fmt.Sprintf("%d|0", proposalID))
+	CallContract(t, ct, "proposals_vote", voteNo, nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
+	if !strings.Contains(res.Ret, "proposal is") {
+		t.Fatalf("expected proposal execution to fail due to updated vote, got %q", res.Ret)
 	}
 }
 
@@ -208,6 +234,36 @@ func TestProposalCreationAllowedForPublic(t *testing.T) {
 	CallContract(t, ct, "proposal_create", proposalPayload, transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+func TestProposalCreationRequiresCostIntent(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	payload := PayloadString(strings.Join(simpleProposalFields(projectID, "2"), "|"))
+	res, _, _ := CallContract(t, ct, "proposal_create", payload, nil, "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "no valid transfer intent") {
+		t.Fatalf("expected intent requirement for proposal cost, got %q", res.Ret)
+	}
+}
+
+func TestProposalCreationRejectsInsufficientCost(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	payload := PayloadString(strings.Join(simpleProposalFields(projectID, "2"), "|"))
+	res, _, _ := CallContract(t, ct, "proposal_create", payload, transferIntent("0.500"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "proposal cost requires at least") {
+		t.Fatalf("expected insufficient cost rejection, got %q", res.Ret)
+	}
+}
+
+func TestProposalCreationRejectsWrongAssetForCost(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	payload := PayloadString(strings.Join(simpleProposalFields(projectID, "2"), "|"))
+	res, _, _ := CallContract(t, ct, "proposal_create", payload, transferIntentWithToken("1.000", "hbd"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "invalid asset") {
+		t.Fatalf("expected proposal cost asset validation, got %q", res.Ret)
+	}
+}
+
 func TestProposalMetaUpdateAllowsPublic(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -221,7 +277,7 @@ func TestProposalMetaUpdateAllowsPublic(t *testing.T) {
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:member2", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 
 	CallContract(t, ct, "proposal_create", outsiderProposalPayload, transferIntent("1.000"), "hive:outsider", true, uint(1_000_000_000))
 }
@@ -295,6 +351,8 @@ func TestProjectLeaveBlockedDuringPayoutProposal(t *testing.T) {
 	if !strings.Contains(res.Ret, "active proposal requesting funds") {
 		t.Fatalf("expected leave rejection due to active payout, got %q", res.Ret)
 	}
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	CallContract(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", true, uint(1_000_000_000))
 }
 
 func TestProposalMetaUpdateLeaveCooldown(t *testing.T) {
@@ -305,7 +363,7 @@ func TestProposalMetaUpdateLeaveCooldown(t *testing.T) {
 	proposalID := createPollProposal(t, ct, projectID, "1", "", "update_leaveCooldown=0")
 	voteForProposal(t, ct, proposalID, "hive:someone", "hive:member2")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 	idStr := strconv.FormatUint(projectID, 10)
 	CallContract(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", true, uint(1_000_000_000))
 	CallContract(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", true, uint(1_000_000_000))
@@ -318,13 +376,13 @@ func TestProposalMetaUpdateThreshold(t *testing.T) {
 	proposalID := createPollProposal(t, ct, projectID, "1", "", "update_threshold=90")
 	voteForProposal(t, ct, proposalID, "hive:someone", "hive:member2")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 
 	limitedProposal := createSimpleProposal(t, ct, projectID, "1")
 	votePayload := PayloadString(fmt.Sprintf("%d|1", limitedProposal))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(limitedProposal), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	res, _, _ := CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", limitedProposal)), nil, "hive:someone", false, uint(1_000_000_000))
+	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", limitedProposal)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T02:00:00")
 	if !strings.Contains(res.Ret, "proposal is") {
 		t.Fatalf("expected execution rejection due to high threshold, got %q", res.Ret)
 	}
@@ -338,7 +396,7 @@ func TestProposalMetaTogglePause(t *testing.T) {
 	proposalID := createPollProposal(t, ct, projectID, "1", "", "toggle_pause=1")
 	voteForProposal(t, ct, proposalID, "hive:someone", "hive:member2")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(strings.Join(simpleProposalFields(projectID, "2"), "|")), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
 	if !strings.Contains(res.Ret, "project is paused") {
 		t.Fatalf("expected paused project to reject proposal creation, got %q", res.Ret)
@@ -355,7 +413,7 @@ func TestProposalExecuteTransfersFunds2Members(t *testing.T) {
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someoneelse", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
 func TestProposalExecuteTransfersFunds3Members(t *testing.T) {
@@ -369,7 +427,7 @@ func TestProposalExecuteTransfersFunds3Members(t *testing.T) {
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:member2", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
 func TestProposalExecuteRequiresPassed(t *testing.T) {
@@ -377,7 +435,7 @@ func TestProposalExecuteRequiresPassed(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	addTreasuryFunds(t, ct, projectID, "0.400")
 	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200", "")
-	res, _, _ := CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000))
+	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
 	if !strings.Contains(res.Ret, "proposal is") {
 		t.Fatalf("expected execute rejection for active proposal, got %q", res.Ret)
 	}
@@ -389,10 +447,10 @@ func TestProposalExecuteInsufficientFunds(t *testing.T) {
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	joinProjectMember(t, ct, projectID, "hive:member2")
 	addTreasuryFunds(t, ct, projectID, "0.200")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:2.000", "")
 	voteForProposal(t, ct, proposalID, "hive:someone", "hive:member2")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	res, _, _ := CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000))
+	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
 	if !strings.Contains(res.Ret, "insufficient funds") {
 		t.Fatalf("expected insufficient funds rejection, got %q", res.Ret)
 	}
@@ -408,9 +466,78 @@ func TestProposalExecuteBlockedWhenPaused(t *testing.T) {
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", projectID)), nil, "hive:someone", true, uint(1_000_000_000))
-	res, _, _ := CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000))
+	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
 	if !strings.Contains(res.Ret, "project is paused") {
 		t.Fatalf("expected paused project rejection, got %q", res.Ret)
+	}
+}
+
+func TestProposalCancelFlow(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200", "")
+	res, _, _ := CallContract(t, ct, "proposal_cancel", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "cancelled") {
+		t.Fatalf("expected cancellation, got %q", res.Ret)
+	}
+	_, _, _ = CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000))
+}
+
+func TestProposalCancelRequiresCreatorOrOwner(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createPollProposal(t, ct, projectID, "1", "", "")
+	res, _, _ := CallContract(t, ct, "proposal_cancel", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someoneelse", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "only creator or owner") {
+		t.Fatalf("expected unauthorized cancel rejection, got %q", res.Ret)
+	}
+}
+
+func TestProposalCancelOwnerRefundsCreator(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	CallContract(t, ct, "project_transfer", PayloadString(fmt.Sprintf("%d|%s", projectID, "hive:someoneelse")), nil, "hive:someone", true, uint(1_000_000_000))
+	proposalID := createPollProposal(t, ct, projectID, "1", "", "")
+	pre := ct.GetBalance("hive:someone", ledgerDb.AssetHive)
+	CallContract(t, ct, "proposal_cancel", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someoneelse", true, uint(1_000_000_000))
+	post := ct.GetBalance("hive:someone", ledgerDb.AssetHive)
+	if post <= pre {
+		t.Fatalf("expected proposal cost refund to creator")
+	}
+}
+
+func TestProposalExecuteRespectsDelay(t *testing.T) {
+	ct := SetupContractTest()
+	fields := defaultProjectFields()
+	fields[6] = "10"
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	projectID := parseCreatedID(t, res.Ret, "project")
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createPollProposal(t, ct, projectID, "1", "", "")
+	voteForProposal(t, ct, proposalID, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
+	res2, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-03T03:00:00")
+	if !strings.Contains(res2.Ret, "execution delay") {
+		t.Fatalf("expected execution delay enforcement, got %q", res2.Ret)
+	}
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T12:00:00")
+}
+
+func TestProposalMetaUpdateOwner(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createPollProposal(t, ct, projectID, "1", "", "update_owner=hive:someoneelse")
+	voteForProposal(t, ct, proposalID, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	res, _, _ := CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", projectID)), nil, "hive:someoneelse", true, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "paused") {
+		t.Fatalf("new owner should control pause, got %q", res.Ret)
 	}
 }
 
@@ -429,7 +556,11 @@ func parseCreatedID(t *testing.T, ret string, entity string) uint64 {
 }
 
 func transferIntent(limit string) []contracts.Intent {
-	return []contracts.Intent{{Type: "transfer.allow", Args: map[string]string{"limit": limit, "token": "hive"}}}
+	return transferIntentWithToken(limit, "hive")
+}
+
+func transferIntentWithToken(limit string, token string) []contracts.Intent {
+	return []contracts.Intent{{Type: "transfer.allow", Args: map[string]string{"limit": limit, "token": token}}}
 }
 
 func joinProjectMember(t *testing.T, ct *test_utils.ContractTest, projectID uint64, user string) {
@@ -507,8 +638,8 @@ func defaultProjectFields() []string {
 		"50.001",
 		"50.001",
 		"1",
+		"0",
 		"10",
-		"10",
 		"1",
 		"1",
 		"",
@@ -516,5 +647,6 @@ func defaultProjectFields() []string {
 		"",
 		"",
 		"1",
+		"",
 	}
 }

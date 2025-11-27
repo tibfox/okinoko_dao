@@ -23,14 +23,6 @@ func proposalVoteKey(id uint64, voter sdk.Address) string {
 	return string(buf)
 }
 
-// hasVoted checks whether a voter has already cast a vote
-// for a given proposal.
-func hasVoted(id uint64, voter sdk.Address) bool {
-	key := proposalVoteKey(id, voter)
-	ptr := sdk.StateGetObject(key)
-	return ptr != nil && *ptr != ""
-}
-
 // saveVote persists a voter's choices and voting weight
 // for a specific proposal.
 func saveVote(id uint64, voter sdk.Address, choices []uint, weight float64) {
@@ -53,6 +45,43 @@ func encodeVoteRecord(choices []uint, weight float64) string {
 	return buf.String()
 }
 
+type voteRecord struct {
+	Choices []uint
+	Weight  float64
+}
+
+func loadVoteRecord(id uint64, voter sdk.Address) *voteRecord {
+	key := proposalVoteKey(id, voter)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		return nil
+	}
+	rec := decodeVoteRecord(*ptr)
+	return rec
+}
+
+func decodeVoteRecord(data string) *voteRecord {
+	reader := bytes.NewReader([]byte(data))
+	count, err := binary.ReadUvarint(reader)
+	if err != nil {
+		sdk.Abort("failed to decode vote record")
+	}
+	choices := make([]uint, 0, count)
+	for i := uint64(0); i < count; i++ {
+		val, err := binary.ReadUvarint(reader)
+		if err != nil {
+			sdk.Abort("failed to decode vote choice")
+		}
+		choices = append(choices, uint(val))
+	}
+	var floatBuf [8]byte
+	if _, err := reader.Read(floatBuf[:]); err != nil {
+		sdk.Abort("failed to decode vote weight")
+	}
+	weight := math.Float64frombits(binary.BigEndian.Uint64(floatBuf[:]))
+	return &voteRecord{Choices: choices, Weight: weight}
+}
+
 // VoteProposal allows a member of a project to cast a vote on an active proposal.
 // Validates membership, proposal state, stake, and choice indices before recording the vote.
 //
@@ -72,9 +101,8 @@ func VoteProposal(payload *string) *string {
 	voter := getSenderAddress()
 	voterAddr := dao.AddressFromString(voter.String())
 	member := getMember(prj.ID, voterAddr)
-	if hasVoted(input.ProposalID, voter) {
-		sdk.Abort("already voted")
-	}
+
+	prevVote := loadVoteRecord(input.ProposalID, voter)
 	// check if member joined after proposal
 	if member.JoinedAt > prpsl.CreatedAt {
 		sdk.Abort("proposal was created before joining the project")
@@ -86,6 +114,30 @@ func VoteProposal(payload *string) *string {
 	}
 
 	weight := member.Stake
+
+	if prevVote != nil {
+		prevWeight := dao.FloatToAmount(prevVote.Weight)
+		seenPrev := map[uint]bool{}
+		for _, idx := range prevVote.Choices {
+			if seenPrev[idx] {
+				continue
+			}
+			seenPrev[idx] = true
+			if idx >= uint(prpsl.OptionCount) {
+				continue
+			}
+			option := loadProposalOption(prpsl.ID, uint32(idx))
+			if option.WeightTotal > prevWeight {
+				option.WeightTotal -= prevWeight
+			} else {
+				option.WeightTotal = 0
+			}
+			if option.VoterCount > 0 {
+				option.VoterCount--
+			}
+			saveProposalOption(prpsl.ID, uint32(idx), option)
+		}
+	}
 
 	// check if all voted options are valid
 	seen := map[uint]bool{}

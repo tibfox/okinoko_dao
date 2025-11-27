@@ -18,6 +18,7 @@ const (
 	FallbackLeaveCooldownHours          = 24
 	FallbackProposalCost                = 1
 	FallbackProposalCreatorsMembersOnly = true
+	FallbackMembershipPayloadFormat     = "{nft}|{caller}"
 )
 
 // Permission defines access rights for actions within a project.
@@ -152,7 +153,7 @@ func JoinProject(projectID *string) *string {
 		if nftFunction == nil {
 			nftFunction = strptr(FallbackNFTFunction)
 		}
-		payload := UInt64ToString(*prj.Config.MembershipNFT) + "|" + dao.AddressToString(callerAddr)
+		payload := formatMembershipPayload(prj.Config.MembershipNftPayloadFormat, UInt64ToString(*prj.Config.MembershipNFT), dao.AddressToString(callerAddr))
 
 		editions := sdk.ContractCall(
 			*nftContract,
@@ -167,6 +168,10 @@ func JoinProject(projectID *string) *string {
 	ta := getFirstTransferAllow()
 	if ta == nil {
 		sdk.Abort("no valid transfer intent provided")
+	}
+	intentAsset := dao.AssetFromString(ta.Token.String())
+	if intentAsset != prj.FundsAsset {
+		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
 	}
 
 	if ta.Limit != prj.Config.StakeMinAmt && prj.Config.VotingSystem == dao.VotingSystemDemocratic {
@@ -246,24 +251,7 @@ func LeaveProject(projectID *string) *string {
 }
 
 func hasActivePayout(projectID uint64, member dao.Address) bool {
-	count := getCount(ProposalsCount)
-	for i := uint64(0); i < count; i++ {
-		ptr := sdk.StateGetObject(proposalKey(i))
-		if ptr == nil || *ptr == "" {
-			continue
-		}
-		prpsl, err := dao.DecodeProposal([]byte(*ptr))
-		if err != nil || prpsl.ProjectID != projectID {
-			continue
-		}
-		if prpsl.State != dao.ProposalActive || prpsl.Outcome == nil || prpsl.Outcome.Payout == nil {
-			continue
-		}
-		if _, ok := prpsl.Outcome.Payout[member]; ok {
-			return true
-		}
-	}
-	return false
+	return getPayoutLockCount(projectID, member) > 0
 }
 
 // AddFunds transfers additional tokens to a project.
@@ -276,6 +264,7 @@ func AddFunds(payload *string) *string {
 	prj := loadProject(input.ProjectID)
 	caller := getSenderAddress()
 	callerAddr := dao.AddressFromString(caller.String())
+	var stakingMember *dao.Member
 
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow()
@@ -289,22 +278,25 @@ func AddFunds(payload *string) *string {
 		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
 	}
 
+	if input.ToStake {
+		if prj.Config.VotingSystem == dao.VotingSystemDemocratic {
+			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
+		}
+		member := getMember(prj.ID, callerAddr)
+		stakingMember = &member
+	}
+
 	// draw the funds
 	depositAmount := dao.FloatToAmount(ta.Limit)
 	mAmount := dao.AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
 
 	if input.ToStake {
-		if prj.Config.VotingSystem == dao.VotingSystemDemocratic {
-			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
-		} else {
-			member := getMember(prj.ID, callerAddr)
-			member.Stake += depositAmount
-			member.LastActionAt = nowUnix()
-			saveMember(prj.ID, &member)
-			prj.StakeTotal += depositAmount
-		}
-
+		member := stakingMember
+		member.Stake += depositAmount
+		member.LastActionAt = nowUnix()
+		saveMember(prj.ID, member)
+		prj.StakeTotal += depositAmount
 	} else {
 		// add to treasury for payouts
 		prj.Funds += depositAmount

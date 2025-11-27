@@ -19,9 +19,15 @@ func CreateProposal(payload *string) *string {
 
 	caller := getSenderAddress()
 	callerAddr := dao.AddressFromString(caller.String())
+	callerStr := dao.AddressToString(callerAddr)
 	prj := loadProject(input.ProjectID)
 	if prj.Paused {
-		sdk.Abort("project is paused")
+		if input.ProposalOutcome == nil || input.ProposalOutcome.Meta == nil {
+			sdk.Abort("project is paused")
+		}
+		if !allowsPauseMeta(input.ProposalOutcome.Meta) {
+			sdk.Abort("project is paused")
+		}
 	}
 
 	// Only members can create unless config allows public proposals
@@ -58,6 +64,10 @@ func CreateProposal(payload *string) *string {
 	// Count members / sum stakes from aggregates
 	memberSnap := uint(prj.MemberCount)
 	stakeSnap := prj.StakeTotal
+	txID := ""
+	if txPtr := sdk.GetEnvKey("tx.id"); txPtr != nil {
+		txID = *txPtr
+	}
 
 	prpsl := &dao.Proposal{
 		ID:                  id,
@@ -70,14 +80,38 @@ func CreateProposal(payload *string) *string {
 		CreatedAt:           now,
 		DurationHours:       duration,
 		State:               dao.ProposalActive,
-		Tx:                  *sdk.GetEnvKey("tx.id"),
+		Tx:                  txID,
 		MemberCountSnapshot: memberSnap,
 		StakeSnapshot:       stakeSnap,
 		IsPoll:              isPoll,
 		OptionCount:         uint32(len(input.OptionsList)),
+		ExecutableAt:        0,
+	}
+
+	if prj.Config.ProposalCost > 0 {
+		ta := getFirstTransferAllow()
+		if ta == nil {
+			sdk.Abort("no valid transfer intent provided")
+		}
+		asset := dao.AssetFromString(ta.Token.String())
+		if asset != prj.FundsAsset {
+			sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
+		}
+		if ta.Limit < prj.Config.ProposalCost {
+			sdk.Abort(fmt.Sprintf("proposal cost requires at least %f %s", prj.Config.ProposalCost, ta.Token.String()))
+		}
+		costAmount := dao.FloatToAmount(prj.Config.ProposalCost)
+		mAmount := dao.AmountToInt64(costAmount)
+		sdk.HiveDraw(mAmount, ta.Token)
+		prj.Funds += costAmount
+		saveProjectFinance(prj)
+		emitFundsAdded(prj.ID, callerStr, dao.AmountToFloat(costAmount), ta.Token.String(), false)
 	}
 
 	saveProposal(prpsl)
+	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
+		incrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
+	}
 	for i, txt := range input.OptionsList {
 		opt := dao.ProposalOption{Text: txt}
 		saveProposalOption(prpsl.ID, uint32(i), &opt)
@@ -134,6 +168,7 @@ func TallyProposal(proposalId *string) *string {
 
 	// default to failed
 	prpsl.State = dao.ProposalFailed
+	prpsl.ExecutableAt = 0
 
 	if highestOptionId >= 0 && highestOptionValue > 0 {
 		// calculate quorum threshold (round up)
@@ -148,10 +183,16 @@ func TallyProposal(proposalId *string) *string {
 			prpsl.ResultOptionID = int32(highestOptionId)
 			if prpsl.IsPoll && highestOptionId == 1 {
 				prpsl.State = dao.ProposalPassed // make it executable
+				execReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
+				prpsl.ExecutableAt = execReady
+				emitProposalExecutionDelayEvent(prpsl.ProjectID, prpsl.ID, execReady)
 			} else {
 				prpsl.State = dao.ProposalClosed // just close
 			}
 		}
+	}
+	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
+		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
 	saveProposal(prpsl)
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
@@ -175,11 +216,18 @@ func ExecuteProposal(proposalID *string) *string {
 	}
 	prpsl := loadProposal(id)
 	prj := loadProject(prpsl.ProjectID)
-	if prj.Paused {
+	if prj.Paused && !proposalAllowsExecutionWhilePaused(prpsl) {
 		sdk.Abort("project is paused")
 	}
 	if prpsl.State != dao.ProposalPassed {
 		sdk.Abort(fmt.Sprintf("proposal is %s", prpsl.State))
+	}
+	requiredReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
+	if prpsl.ExecutableAt > requiredReady {
+		requiredReady = prpsl.ExecutableAt
+	}
+	if nowUnix() < requiredReady {
+		sdk.Abort(fmt.Sprintf("execution delay until %s", time.Unix(requiredReady, 0).UTC().Format(time.RFC3339)))
 	}
 	fundsTransferred := false
 	configChanged := false
@@ -213,6 +261,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid threshold update")
 					}
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "threshold", fmt.Sprintf("%f", prj.Config.ThresholdPercent), fmt.Sprintf("%f", v))
 					prj.Config.ThresholdPercent = v
 					metaChanged = true
 					configChanged = true
@@ -221,6 +270,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid quorum update")
 					}
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "quorum", fmt.Sprintf("%f", prj.Config.QuorumPercent), fmt.Sprintf("%f", v))
 					prj.Config.QuorumPercent = v
 					metaChanged = true
 					configChanged = true
@@ -229,6 +279,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid proposal duration update")
 					}
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalDuration", fmt.Sprintf("%d", prj.Config.ProposalDurationHours), value)
 					prj.Config.ProposalDurationHours = v
 					metaChanged = true
 					configChanged = true
@@ -237,6 +288,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid execution delay update")
 					}
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "executionDelay", fmt.Sprintf("%d", prj.Config.ExecutionDelayHours), value)
 					prj.Config.ExecutionDelayHours = v
 					metaChanged = true
 					configChanged = true
@@ -245,6 +297,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid leave cooldown update")
 					}
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "leaveCooldown", fmt.Sprintf("%d", prj.Config.LeaveCooldownHours), value)
 					prj.Config.LeaveCooldownHours = v
 					metaChanged = true
 					configChanged = true
@@ -253,6 +306,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid proposal cost update")
 					}
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalCost", fmt.Sprintf("%f", prj.Config.ProposalCost), fmt.Sprintf("%f", v))
 					prj.Config.ProposalCost = v
 					metaChanged = true
 					configChanged = true
@@ -261,25 +315,60 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid membership nft update")
 					}
+					prev := ""
+					if prj.Config.MembershipNFT != nil {
+						prev = fmt.Sprintf("%d", *prj.Config.MembershipNFT)
+					}
 					prj.Config.MembershipNFT = &v
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "membershipNFT", prev, value)
 					metaChanged = true
 					configChanged = true
 				case "update_membershipNFTContract":
 					v := value
+					prev := ""
+					if prj.Config.MembershipNFTContract != nil {
+						prev = *prj.Config.MembershipNFTContract
+					}
 					prj.Config.MembershipNFTContract = &v
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "membershipNFTContract", prev, value)
 					metaChanged = true
 					configChanged = true
 				case "update_membershipNFTContractFunction":
 					v := value
+					prev := ""
+					if prj.Config.MembershipNFTContractFunction != nil {
+						prev = *prj.Config.MembershipNFTContractFunction
+					}
 					prj.Config.MembershipNFTContractFunction = &v
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "membershipNFTContractFunction", prev, value)
+					metaChanged = true
+					configChanged = true
+				case "update_membershipNFTPayload":
+					prev := prj.Config.MembershipNftPayloadFormat
+					prj.Config.MembershipNftPayloadFormat = normalizeMembershipPayloadFormat(value)
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "membershipNftPayload", prev, prj.Config.MembershipNftPayloadFormat)
 					metaChanged = true
 					configChanged = true
 				case "update_proposalCreatorRestriction":
+					prev := prj.Config.ProposalsMembersOnly
 					prj.Config.ProposalsMembersOnly = parseCreatorRestrictionField(value)
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalCreatorRestriction", strconv.FormatBool(prev), strconv.FormatBool(prj.Config.ProposalsMembersOnly))
 					metaChanged = true
 					configChanged = true
 				case "toggle_pause":
+					prev := prj.Paused
 					prj.Paused = !prj.Paused
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "paused", strconv.FormatBool(prev), strconv.FormatBool(prj.Paused))
+					metaChanged = true
+					stateChanged = true
+				case "update_owner":
+					newOwnerAddr := dao.AddressFromString(value)
+					if _, exists := loadMember(prj.ID, newOwnerAddr); !exists {
+						sdk.Abort("new owner must be a member")
+					}
+					oldOwner := prj.Owner
+					prj.Owner = newOwnerAddr
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "owner", dao.AddressToString(oldOwner), dao.AddressToString(newOwnerAddr))
 					metaChanged = true
 					stateChanged = true
 				}
@@ -332,4 +421,49 @@ func loadProposal(id uint64) *dao.Proposal {
 		sdk.Abort(fmt.Sprintf("failed to decode proposal: %v", err))
 	}
 	return prpsl
+}
+
+//go:wasmexport proposal_cancel
+func CancelProposal(payload *string) *string {
+	raw := unwrapPayload(payload, "proposal ID is required")
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid proposal ID")
+	}
+	prpsl := loadProposal(id)
+	if prpsl.State != dao.ProposalActive {
+		sdk.Abort("proposal not active")
+	}
+	prj := loadProject(prpsl.ProjectID)
+
+	caller := getSenderAddress()
+	callerAddr := dao.AddressFromString(caller.String())
+	if callerAddr != prpsl.Creator && callerAddr != prj.Owner {
+		sdk.Abort("only creator or owner can cancel")
+	}
+
+	refund := callerAddr != prpsl.Creator && prj.Config.ProposalCost > 0
+	var refundAmount dao.Amount
+	if refund {
+		refundAmount = dao.FloatToAmount(prj.Config.ProposalCost)
+		if prj.Funds < refundAmount {
+			refund = false
+		} else {
+			prj.Funds -= refundAmount
+			saveProjectFinance(prj)
+			mAmount := dao.AmountToInt64(refundAmount)
+			sdk.HiveTransfer(sdk.Address(dao.AddressToString(prpsl.Creator)), mAmount, sdk.Asset(dao.AssetToString(prj.FundsAsset)))
+			emitFundsRemoved(prj.ID, dao.AddressToString(prpsl.Creator), dao.AmountToFloat(refundAmount), dao.AssetToString(prj.FundsAsset), false)
+		}
+	}
+
+	prpsl.State = dao.ProposalCancelled
+	prpsl.ResultOptionID = -1
+	prpsl.ExecutableAt = 0
+	saveProposal(prpsl)
+	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
+		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
+	}
+	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
+	return strptr("cancelled")
 }

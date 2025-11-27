@@ -72,6 +72,15 @@ func emitProposalStateChangedEvent(proposalId uint64, proposalState dao.Proposal
 	))
 }
 
+func emitProposalExecutionDelayEvent(projectId uint64, proposalId uint64, readyAt int64) {
+	sdk.Log(fmt.Sprintf(
+		"px|pId:%d|prId:%d|ready:%s",
+		projectId,
+		proposalId,
+		strconv.FormatInt(readyAt, 10),
+	))
+}
+
 // emitProposalResultEvent logs the final result of a proposal within a project.
 //
 // The event is recorded in the format:
@@ -83,6 +92,17 @@ func emitProposalResultEvent(projectId uint64, proposalId uint64, result string)
 		projectId,
 		proposalId,
 		result,
+	))
+}
+
+func emitProposalConfigUpdatedEvent(projectId uint64, proposalId uint64, field string, old string, new string) {
+	sdk.Log(fmt.Sprintf(
+		"pm|pId:%d|prId:%d|f:%s|old:%s|new:%s",
+		projectId,
+		proposalId,
+		field,
+		old,
+		new,
 	))
 }
 

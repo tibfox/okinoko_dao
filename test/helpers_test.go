@@ -30,10 +30,10 @@ func SetupContractTest() *test_utils.ContractTest {
 	CleanBadgerDB()
 	ct := test_utils.NewContractTest()
 	ct.RegisterContract(ContractID, ownerAddress, ContractWasm)
-	ct.Deposit("hive:someone", 2000, ledgerDb.AssetHive)
-	ct.Deposit("hive:someoneelse", 2000, ledgerDb.AssetHive)
-	ct.Deposit("hive:member2", 2000, ledgerDb.AssetHive)
-	ct.Deposit("hive:outsider", 2000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someone", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someoneelse", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHive)
 	return &ct
 }
 

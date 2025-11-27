@@ -18,13 +18,14 @@ var (
 )
 
 const (
-	kProjectMeta    byte = 0x01
-	kProjectConfig  byte = 0x02
-	kProjectFinance byte = 0x03
-	kProjectMember  byte = 0x04
-	kProposalMeta   byte = 0x10
-	kProposalOption byte = 0x11
-	kVoteReceipt    byte = 0x20
+	kProjectMeta       byte = 0x01
+	kProjectConfig     byte = 0x02
+	kProjectFinance    byte = 0x03
+	kProjectMember     byte = 0x04
+	kProjectPayoutLock byte = 0x05
+	kProposalMeta      byte = 0x10
+	kProposalOption    byte = 0x11
+	kVoteReceipt       byte = 0x20
 )
 
 func packU64LEInline(x uint64, dst []byte) {
@@ -166,6 +167,15 @@ func memberKey(projectID uint64, addr dao.Address) string {
 	return string(buf)
 }
 
+func payoutLockKey(projectID uint64, addr dao.Address) string {
+	addrStr := dao.AddressToString(addr)
+	buf := make([]byte, 0, 1+8+len(addrStr))
+	buf = append(buf, kProjectPayoutLock)
+	buf = packU64LE(projectID, buf)
+	buf = append(buf, addrStr...)
+	return string(buf)
+}
+
 // proposalKey builds a storage key string for a proposal by ID.
 func proposalKey(id uint64) string {
 	var buf [9]byte
@@ -236,7 +246,12 @@ func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
 	cfg.ThresholdPercent = parseFloatField(get(3), "threshold")
 	cfg.QuorumPercent = parseFloatField(get(4), "quorum")
 	cfg.ProposalDurationHours = parseUintField(get(5), "proposal duration")
-	cfg.ExecutionDelayHours = parseUintField(get(6), "execution delay")
+	execDelayField := strings.TrimSpace(get(6))
+	if execDelayField == "" {
+		cfg.ExecutionDelayHours = FallbackExecutionDelayHours
+	} else {
+		cfg.ExecutionDelayHours = parseUintField(execDelayField, "execution delay")
+	}
 	cfg.LeaveCooldownHours = parseUintField(get(7), "leave cooldown")
 	cfg.ProposalCost = parseFloatField(get(8), "proposal cost")
 	cfg.StakeMinAmt = parseFloatField(get(9), "min stake")
@@ -254,6 +269,9 @@ func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
 		cfg.MembershipNFT = &parsed
 	}
 	cfg.ProposalsMembersOnly = parseCreatorRestrictionField(get(14))
+	if v := strings.TrimSpace(get(15)); v != "" {
+		cfg.MembershipNftPayloadFormat = v
+	}
 	normalizeProjectConfig(&cfg)
 	args.ProjectConfig = cfg
 	return args
@@ -386,6 +404,57 @@ func deleteMember(projectID uint64, addr dao.Address) {
 	sdk.StateDeleteObject(key)
 	if cachedMembers != nil {
 		delete(cachedMembers, key)
+	}
+}
+
+func getPayoutLockCount(projectID uint64, addr dao.Address) uint64 {
+	key := payoutLockKey(projectID, addr)
+	ptr := sdk.StateGetObject(key)
+	if ptr == nil || *ptr == "" {
+		return 0
+	}
+	val, err := strconv.ParseUint(*ptr, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid payout lock value")
+	}
+	return val
+}
+
+func incrementPayoutLock(projectID uint64, addr dao.Address) {
+	key := payoutLockKey(projectID, addr)
+	count := getPayoutLockCount(projectID, addr) + 1
+	sdk.StateSetObject(key, strconv.FormatUint(count, 10))
+}
+
+func decrementPayoutLock(projectID uint64, addr dao.Address) {
+	key := payoutLockKey(projectID, addr)
+	count := getPayoutLockCount(projectID, addr)
+	if count == 0 {
+		return
+	}
+	count--
+	if count == 0 {
+		sdk.StateDeleteObject(key)
+	} else {
+		sdk.StateSetObject(key, strconv.FormatUint(count, 10))
+	}
+}
+
+func incrementPayoutLocks(projectID uint64, payout map[dao.Address]dao.Amount) {
+	if payout == nil {
+		return
+	}
+	for addr := range payout {
+		incrementPayoutLock(projectID, addr)
+	}
+}
+
+func decrementPayoutLocks(projectID uint64, payout map[dao.Address]dao.Amount) {
+	if payout == nil {
+		return
+	}
+	for addr := range payout {
+		decrementPayoutLock(projectID, addr)
 	}
 }
 
@@ -547,15 +616,13 @@ func normalizeProjectConfig(cfg *dao.ProjectConfig) {
 	if cfg.ProposalDurationHours <= 0 {
 		cfg.ProposalDurationHours = FallbackProposalDurationHours
 	}
-	if cfg.ExecutionDelayHours <= 0 {
-		cfg.ExecutionDelayHours = FallbackExecutionDelayHours
-	}
 	if cfg.LeaveCooldownHours <= 0 {
 		cfg.LeaveCooldownHours = FallbackLeaveCooldownHours
 	}
 	if cfg.ProposalCost <= 0 {
 		cfg.ProposalCost = FallbackProposalCost
 	}
+	cfg.MembershipNftPayloadFormat = normalizeMembershipPayloadFormat(cfg.MembershipNftPayloadFormat)
 }
 
 func normalizeOptionalField(val string) string {
@@ -607,6 +674,26 @@ func parseCreatorRestrictionField(val string) bool {
 		sdk.Abort("invalid proposal creator restriction")
 	}
 	return true
+}
+
+func normalizeMembershipPayloadFormat(format string) string {
+	format = strings.TrimSpace(format)
+	if format == "" {
+		return FallbackMembershipPayloadFormat
+	}
+	if !strings.Contains(format, "{nft}") || !strings.Contains(format, "{caller}") {
+		return FallbackMembershipPayloadFormat
+	}
+	return format
+}
+
+func formatMembershipPayload(format string, nftID string, caller string) string {
+	if format == "" {
+		format = FallbackMembershipPayloadFormat
+	}
+	result := strings.ReplaceAll(format, "{nft}", nftID)
+	result = strings.ReplaceAll(result, "{caller}", caller)
+	return result
 }
 
 // strptr returns a pointer to the provided string.
@@ -669,4 +756,22 @@ func UIntSliceToString(nums []uint) string {
 		strNums[i] = strconv.FormatUint(uint64(n), 10)
 	}
 	return strings.Join(strNums, ",")
+}
+func allowsPauseMeta(meta map[string]string) bool {
+	if meta == nil {
+		return false
+	}
+	if len(meta) == 1 {
+		if _, ok := meta["toggle_pause"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func proposalAllowsExecutionWhilePaused(prpsl *dao.Proposal) bool {
+	if prpsl == nil || prpsl.Outcome == nil || prpsl.Outcome.Meta == nil {
+		return false
+	}
+	return allowsPauseMeta(prpsl.Outcome.Meta)
 }
