@@ -59,7 +59,7 @@ func CreateProject(payload *string) *string {
 	stakeMin := stakeLimit
 	if input.ProjectConfig.StakeMinAmt > 0 {
 		stakeMin = input.ProjectConfig.StakeMinAmt
-		if stakeMin > stakeLimit {
+		if dao.FloatToAmount(stakeMin) > dao.FloatToAmount(stakeLimit) {
 			sdk.Abort(fmt.Sprintf("transfer limit %f < StakeMinAmt %f", stakeLimit, stakeMin))
 		}
 	} else {
@@ -174,12 +174,20 @@ func JoinProject(projectID *string) *string {
 		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
 	}
 
-	if ta.Limit != prj.Config.StakeMinAmt && prj.Config.VotingSystem == dao.VotingSystemDemocratic {
-		sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
+	if prj.Config.VotingSystem == dao.VotingSystemDemocratic {
+		expectedStake := dao.FloatToAmount(prj.Config.StakeMinAmt)
+		providedStake := dao.FloatToAmount(ta.Limit)
+		if providedStake != expectedStake {
+			sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
+		}
 	}
 
-	if ta.Limit < prj.Config.StakeMinAmt && prj.Config.VotingSystem == dao.VotingSystemStake {
-		sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
+	if prj.Config.VotingSystem == dao.VotingSystemStake {
+		requiredStake := dao.FloatToAmount(prj.Config.StakeMinAmt)
+		providedStake := dao.FloatToAmount(ta.Limit)
+		if providedStake < requiredStake {
+			sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
+		}
 	}
 	now := nowUnix()
 

@@ -105,7 +105,7 @@ func VoteProposal(payload *string) *string {
 	}
 
 	// check if stakemin is still the same (it can get modified by proposals)
-	if prj.Config.StakeMinAmt > dao.AmountToFloat(member.Stake) {
+	if dao.FloatToAmount(prj.Config.StakeMinAmt) > member.Stake {
 		sdk.Abort("minimum stake has changed since membership - increase stake")
 	}
 

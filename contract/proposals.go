@@ -96,10 +96,11 @@ func CreateProposal(payload *string) *string {
 		if asset != prj.FundsAsset {
 			sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
 		}
-		if ta.Limit < prj.Config.ProposalCost {
+		costAmount := dao.FloatToAmount(prj.Config.ProposalCost)
+		providedAmount := dao.FloatToAmount(ta.Limit)
+		if providedAmount < costAmount {
 			sdk.Abort(fmt.Sprintf("proposal cost requires at least %f %s", prj.Config.ProposalCost, ta.Token.String()))
 		}
-		costAmount := dao.FloatToAmount(prj.Config.ProposalCost)
 		mAmount := dao.AmountToInt64(costAmount)
 		sdk.HiveDraw(mAmount, ta.Token)
 		prj.Funds += costAmount
