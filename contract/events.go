@@ -4,8 +4,83 @@ import (
 	"fmt"
 	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
+	"sort"
 	"strconv"
+	"strings"
 )
+
+// sanitizeEventValue strips delimiter characters from arbitrary user text so logs stay parseable.
+func sanitizeEventValue(val string) string {
+	val = strings.ReplaceAll(val, "|", " ")
+	val = strings.ReplaceAll(val, "\n", " ")
+	return strings.TrimSpace(val)
+}
+
+func formatOptionalString(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return sanitizeEventValue(*ptr)
+}
+
+func formatOptionalUint(ptr *uint64) string {
+	if ptr == nil {
+		return ""
+	}
+	return strconv.FormatUint(*ptr, 10)
+}
+
+func formatMetadataMap(meta map[string]string) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(meta))
+	for key := range meta {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", sanitizeEventValue(key), sanitizeEventValue(meta[key])))
+	}
+	return strings.Join(parts, ";")
+}
+
+func formatPayoutMap(payout map[dao.Address]dao.Amount) string {
+	if len(payout) == 0 {
+		return ""
+	}
+	type payoutEntry struct {
+		addr   string
+		amount dao.Amount
+	}
+	entries := make([]payoutEntry, 0, len(payout))
+	for addr, amt := range payout {
+		entries = append(entries, payoutEntry{
+			addr:   dao.AddressToString(addr),
+			amount: amt,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].addr < entries[j].addr
+	})
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, fmt.Sprintf("%s:%f", entry.addr, dao.AmountToFloat(entry.amount)))
+	}
+	return strings.Join(out, ";")
+}
+
+func formatOptionsList(opts []string) string {
+	if len(opts) == 0 {
+		return ""
+	}
+	clean := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		clean = append(clean, sanitizeEventValue(opt))
+	}
+	return strings.Join(clean, ";")
+}
 
 // emitJoinedEvent writes a tiny "mj" log so watchers know someone fresh just joined the project adress.
 func emitJoinedEvent(projectId uint64, memberAddress string) {
@@ -26,21 +101,55 @@ func emitLeaveEvent(projectId uint64, memberAddress string) {
 }
 
 // emitProjectCreatedEvent gives explorers a neat ping without scanning full storage diffs.
-func emitProjectCreatedEvent(projectId uint64, createdByAddress string) {
-	sdk.Log(fmt.Sprintf(
-		"dc|id:%d|by:%s",
-		projectId,
+func emitProjectCreatedEvent(project *dao.Project, createdByAddress string) {
+	payload := fmt.Sprintf(
+		"dc|id:%d|by:%s|name:%s|description:%s|metadata:%s|asset:%s|voting:%s|threshold:%f|quorum:%f|proposalDuration:%d|executionDelay:%d|leaveCooldown:%d|proposalCost:%f|stakeMin:%f|membershipContract:%s|membershipFunction:%s|membershipNft:%s|membershipPayload:%s|membersOnly:%s",
+		project.ID,
 		createdByAddress,
-	))
+		sanitizeEventValue(project.Name),
+		sanitizeEventValue(project.Description),
+		sanitizeEventValue(project.Metadata),
+		dao.AssetToString(project.FundsAsset),
+		project.Config.VotingSystem.String(),
+		project.Config.ThresholdPercent,
+		project.Config.QuorumPercent,
+		project.Config.ProposalDurationHours,
+		project.Config.ExecutionDelayHours,
+		project.Config.LeaveCooldownHours,
+		project.Config.ProposalCost,
+		project.Config.StakeMinAmt,
+		formatOptionalString(project.Config.MembershipNFTContract),
+		formatOptionalString(project.Config.MembershipNFTContractFunction),
+		formatOptionalUint(project.Config.MembershipNFT),
+		sanitizeEventValue(project.Config.MembershipNftPayloadFormat),
+		strconv.FormatBool(project.Config.ProposalsMembersOnly),
+	)
+	sdk.Log(payload)
 }
 
 // emitProposalCreatedEvent keeps observers updated with a short pc line for every new idea.
-func emitProposalCreatedEvent(proposalId uint64, memberAddress string) {
-	sdk.Log(fmt.Sprintf(
-		"pc|id:%d|by:%s",
-		proposalId,
-		memberAddress,
-	))
+func emitProposalCreatedEvent(prpsl *dao.Proposal, projectID uint64, creator string, options []string) {
+	var payoutStr string
+	var outcomeMeta string
+	if prpsl.Outcome != nil {
+		payoutStr = formatPayoutMap(prpsl.Outcome.Payout)
+		outcomeMeta = formatMetadataMap(prpsl.Outcome.Meta)
+	}
+	payload := fmt.Sprintf(
+		"pc|id:%d|project:%d|by:%s|name:%s|description:%s|metadata:%s|duration:%d|isPoll:%s|options:%s|payouts:%s|outcomeMeta:%s",
+		prpsl.ID,
+		projectID,
+		creator,
+		sanitizeEventValue(prpsl.Name),
+		sanitizeEventValue(prpsl.Description),
+		sanitizeEventValue(prpsl.Metadata),
+		prpsl.DurationHours,
+		strconv.FormatBool(prpsl.IsPoll),
+		formatOptionsList(options),
+		payoutStr,
+		outcomeMeta,
+	)
+	sdk.Log(payload)
 }
 
 // emitProposalStateChangedEvent is the swiss army knife log entry for any state flip.

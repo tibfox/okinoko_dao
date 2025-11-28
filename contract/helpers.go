@@ -536,7 +536,7 @@ func parseVotingSystem(val string) dao.VotingSystem {
 func parseFloatField(val string, field string) float64 {
 	val = strings.TrimSpace(val)
 	if val == "" {
-		return 0
+		return -1
 	}
 	f, err := strconv.ParseFloat(val, 64)
 	if err != nil {
@@ -654,7 +654,7 @@ func normalizeProjectConfig(cfg *dao.ProjectConfig) {
 	if cfg.LeaveCooldownHours <= 0 {
 		cfg.LeaveCooldownHours = FallbackLeaveCooldownHours
 	}
-	if cfg.ProposalCost <= 0 {
+	if cfg.ProposalCost < 0 {
 		cfg.ProposalCost = FallbackProposalCost
 	}
 	cfg.MembershipNftPayloadFormat = normalizeMembershipPayloadFormat(cfg.MembershipNftPayloadFormat)
@@ -799,6 +799,7 @@ func UIntSliceToString(nums []uint) string {
 	}
 	return strings.Join(strNums, ",")
 }
+
 // allowsPauseMeta checks whether the meta payload only toggles pause state.
 func allowsPauseMeta(meta map[string]string) bool {
 	if meta == nil {

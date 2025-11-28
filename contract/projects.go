@@ -110,7 +110,7 @@ func CreateProject(payload *string) *string {
 	saveProject(&prj)
 	setCount(ProjectsCount, id+1)
 
-	emitProjectCreatedEvent(id, callerStr)
+	emitProjectCreatedEvent(&prj, callerStr)
 	stakeAmountFloat := dao.AmountToFloat(stakeAmount)
 	treasuryAmountFloat := dao.AmountToFloat(treasuryAmount)
 	emitFundsAdded(prj.ID, callerStr, stakeAmountFloat, tokenStr, true)

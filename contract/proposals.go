@@ -116,7 +116,7 @@ func CreateProposal(payload *string) *string {
 		saveProposalOption(prpsl.ID, uint32(i), &opt)
 	}
 	setCount(ProposalsCount, id+1)
-	emitProposalCreatedEvent(id, dao.AddressToString(callerAddr))
+	emitProposalCreatedEvent(prpsl, prj.ID, dao.AddressToString(callerAddr), input.OptionsList)
 	emitProposalStateChangedEvent(id, dao.ProposalActive)
 	result := strconv.FormatUint(id, 10)
 	return &result
@@ -179,13 +179,13 @@ func TallyProposal(proposalId *string) *string {
 
 		if quorumMet && thresholdMet {
 			prpsl.ResultOptionID = int32(highestOptionId)
-			if prpsl.IsPoll && highestOptionId == 1 {
-				prpsl.State = dao.ProposalPassed // make it executable
+			if prpsl.IsPoll {
+				prpsl.State = dao.ProposalClosed // polls remain advisory even if yes wins
+			} else {
+				prpsl.State = dao.ProposalPassed // non-polls become executable actions
 				execReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
 				prpsl.ExecutableAt = execReady
 				emitProposalExecutionDelayEvent(prpsl.ProjectID, prpsl.ID, execReady)
-			} else {
-				prpsl.State = dao.ProposalClosed // just close
 			}
 		}
 	}

@@ -7,3 +7,4 @@ identityConfig.json
 data/
 artifacts/
 .cache/
+.config/

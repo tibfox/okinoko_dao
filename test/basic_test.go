@@ -263,6 +263,19 @@ func TestProposalCreationRequiresCostIntent(t *testing.T) {
 	}
 }
 
+// TestProposalCreationZeroCostNoIntent ensures proposals can be created without an intent when cost is zero.
+func TestProposalCreationZeroCostNoIntent(t *testing.T) {
+	ct := SetupContractTest()
+	fields := defaultProjectFields()
+	fields[8] = "0"
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	projectID := parseCreatedID(t, res.Ret, "project")
+	proposalFields := simpleProposalFields(projectID, "2")
+	proposalPayload := PayloadString(strings.Join(proposalFields, "|"))
+	CallContract(t, ct, "proposal_create", proposalPayload, nil, "hive:someone", true, uint(1_000_000_000))
+}
+
 // TestProposalCreationRejectsInsufficientCost checks the proposal creation rejects insufficient cost flow so we dont break it again.
 func TestProposalCreationRejectsInsufficientCost(t *testing.T) {
 	ct := SetupContractTest()
@@ -325,6 +338,16 @@ func TestProposalEarlyTallyFails(t *testing.T) {
 	if !strings.Contains(res.Ret, "still running") {
 		t.Fatalf("expected tally to fail with running proposal, got %q", res.Ret)
 	}
+}
+
+// TestVoteAllowedAfterDurationBeforeTally ensures votes can be cast after the duration until tally occurs.
+func TestVoteAllowedAfterDurationBeforeTally(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createSimpleProposal(t, ct, projectID, "1")
+	payload := PayloadString(fmt.Sprintf("%d|1", proposalID))
+	CallContractAt(t, ct, "proposals_vote", payload, nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
 // TestProjectLeaveFlow checks the project leave flow so we dont break it again.
@@ -434,6 +457,7 @@ func TestProposalMetaTogglePause(t *testing.T) {
 	}
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|false", projectID)), nil, "hive:someone", true, uint(1_000_000_000))
 }
+
 // TestProposalExecuteTransfersFunds2Members checks the payout split across two members so we dont break it again.
 func TestProposalExecuteTransfersFunds2Members(t *testing.T) {
 	ct := SetupContractTest()
@@ -582,6 +606,19 @@ func TestProposalMetaUpdateOwner(t *testing.T) {
 	}
 }
 
+// TestFullCycle simulates a simple cycle from project to executed proposal.
+func TestFullCycle(t *testing.T) {
+	ct := SetupContractTest()
+	CallContract(t, ct, "project_create", PayloadString("test|desc|0|50.001|50.001|1|0|10|1|1|||||1|"), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "project_join", PayloadString("0"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
+	addTreasuryFunds(t, ct, 0, "3.000")
+	CallContract(t, ct, "proposal_create", PayloadString("0|prpsl|desc|1||0|hive:tibfox:3||"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposals_vote", PayloadString("0|1"), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposals_vote", PayloadString("0|1"), nil, "hive:someoneelse", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(0), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString("0"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T01:00:00")
+}
+
 // parseCreatedID reads the `msg:<id>` responses so the tests can reuse the same helper everywhere.
 func parseCreatedID(t *testing.T, ret string, entity string) uint64 {
 	cleaned := strings.TrimSpace(ret)
@@ -666,7 +703,7 @@ func createPollProposal(t *testing.T, ct *test_utils.ContractTest, projectID uin
 		"treasury distribution",
 		duration,
 		"",
-		"1",
+		"0",
 		payouts,
 		meta,
 		"",

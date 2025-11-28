@@ -93,10 +93,6 @@ func VoteProposal(payload *string) *string {
 	if prpsl.State != dao.ProposalActive {
 		sdk.Abort("proposal not active")
 	}
-	if nowUnix() > prpsl.CreatedAt+int64(prpsl.DurationHours)*3600 {
-		sdk.Abort("proposal expired")
-	}
-
 	prj := loadProject(prpsl.ProjectID)
 	voter := getSenderAddress()
 	voterAddr := dao.AddressFromString(voter.String())
