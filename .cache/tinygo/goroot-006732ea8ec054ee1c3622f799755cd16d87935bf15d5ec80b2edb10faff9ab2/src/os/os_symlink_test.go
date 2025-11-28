@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/os/os_symlink_test.go

@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/net/mac_test.go

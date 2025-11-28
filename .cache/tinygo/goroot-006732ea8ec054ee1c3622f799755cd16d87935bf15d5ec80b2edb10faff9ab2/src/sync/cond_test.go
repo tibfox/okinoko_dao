@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/sync/cond_test.go

@@ -1,1 +1,0 @@
-/usr/local/go/src/crypto/x509/parser_test.go

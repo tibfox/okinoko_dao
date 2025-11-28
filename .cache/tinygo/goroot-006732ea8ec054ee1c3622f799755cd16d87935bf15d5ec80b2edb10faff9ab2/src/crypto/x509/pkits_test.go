@@ -1,1 +1,0 @@
-/usr/local/go/src/crypto/x509/pkits_test.go

@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/syscall/syscall_nonhosted.go

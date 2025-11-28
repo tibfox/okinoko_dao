@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/os/getpagesize_test.go

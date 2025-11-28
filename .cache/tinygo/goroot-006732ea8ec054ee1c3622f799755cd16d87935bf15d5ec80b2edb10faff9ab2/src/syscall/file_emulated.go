@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/syscall/file_emulated.go

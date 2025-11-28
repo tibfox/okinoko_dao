@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/syscall/env_wasip2.go

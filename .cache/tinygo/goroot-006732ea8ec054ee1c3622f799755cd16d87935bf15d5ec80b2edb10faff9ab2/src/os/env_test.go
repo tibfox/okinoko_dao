@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/os/env_test.go

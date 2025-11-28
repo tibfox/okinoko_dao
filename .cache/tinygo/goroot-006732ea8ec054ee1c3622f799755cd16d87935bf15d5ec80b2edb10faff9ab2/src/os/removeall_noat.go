@@ -1,1 +1,0 @@
-/usr/local/lib/tinygo/src/os/removeall_noat.go

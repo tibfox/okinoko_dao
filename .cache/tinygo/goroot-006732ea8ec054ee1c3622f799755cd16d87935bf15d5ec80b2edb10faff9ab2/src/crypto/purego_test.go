@@ -1,1 +1,0 @@
-/usr/local/go/src/crypto/purego_test.go
