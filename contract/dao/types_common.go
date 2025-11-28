@@ -6,14 +6,20 @@ const AmountScale = 1000
 
 type Amount int64
 
+// FloatToAmount scales human floats by AmountScale and rounds to int64 so storage stays precise.
+// Example payload: FloatToAmount(1.234)
 func FloatToAmount(v float64) Amount {
 	return Amount(math.Round(v * AmountScale))
 }
 
+// AmountToFloat converts back to float64 for reporting or events.
+// Example payload: AmountToFloat(FloatToAmount(2.5))
 func AmountToFloat(v Amount) float64 {
 	return float64(v) / AmountScale
 }
 
+// AmountToInt64 exposes the raw scaled int64 for Hive transfer functions.
+// Example payload: AmountToInt64(FloatToAmount(3.14))
 func AmountToInt64(v Amount) int64 {
 	return int64(v)
 }
@@ -27,6 +33,8 @@ const (
 	VotingSystemStake       VotingSystem = 2
 )
 
+// String serializes the VotingSystem enum into the short log-friendly codes.
+// Example payload: dao.VotingSystemStake.String()
 func (vs VotingSystem) String() string {
 	switch vs {
 	case VotingSystemDemocratic:
@@ -51,6 +59,8 @@ const (
 	ProposalCancelled        ProposalState = 6
 )
 
+// String prints the proposal state as lower-case text for events and logs.
+// Example payload: dao.ProposalPassed.String()
 func (ps ProposalState) String() string {
 	switch ps {
 	case ProposalActive:
@@ -187,8 +197,18 @@ type AddFundsArgs struct {
 	ToStake   bool
 }
 
-// Helpers exposed for tooling/tests.
+// AddressFromString converts a human string to the platform-specific address wrapper.
+// Example payload: AddressFromString("hive:alice")
 func AddressFromString(s string) Address { return newAddress(s) }
-func AddressToString(a Address) string   { return addressString(a) }
-func AssetFromString(s string) Asset     { return newAsset(s) }
-func AssetToString(a Asset) string       { return assetString(a) }
+
+// AddressToString turns the wrapped type back into the underlying string.
+// Example payload: AddressToString(AddressFromString("hive:bob"))
+func AddressToString(a Address) string { return addressString(a) }
+
+// AssetFromString wraps a ticker string so type checking keeps us honest.
+// Example payload: AssetFromString("hive")
+func AssetFromString(s string) Asset { return newAsset(s) }
+
+// AssetToString unwraps the ticker string for logs or SDK calls.
+// Example payload: AssetToString(AssetFromString("hbd"))
+func AssetToString(a Asset) string { return assetString(a) }

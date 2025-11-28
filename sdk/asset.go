@@ -9,6 +9,8 @@ const (
 	AssetHbdSavings Asset = "hbd_savings"
 )
 
+// String returns the raw ticker string for logging or host calls.
+// Example payload: sdk.AssetHive.String()
 func (a Asset) String() string {
 	return string(a)
 }

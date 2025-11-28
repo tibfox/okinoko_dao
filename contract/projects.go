@@ -36,7 +36,8 @@ const (
 // Project operations
 // -----------------------------------------------------------------------------
 
-// CreateProject initializes and saves a new project.
+// CreateProject bootstraps a DAO, pulling stake + treasury in one wonky transfer.allow parsing.
+// Example payload: CreateProject(strptr("My DAO|desc|..."))
 //
 //go:wasmexport project_create
 func CreateProject(payload *string) *string {
@@ -118,9 +119,8 @@ func CreateProject(payload *string) *string {
 	return &result
 }
 
-// JoinProject allows a caller to join an existing project
-// using the first valid transfer intent. Membership may require
-// an NFT depending on project configuration.
+// JoinProject lets someone stake into a DAO, optionally proving NFT membership before funds move.
+// Example payload: JoinProject(strptr("123"))
 //
 //go:wasmexport project_join
 func JoinProject(projectID *string) *string {
@@ -202,8 +202,8 @@ func JoinProject(projectID *string) *string {
 	return strptr("joined")
 }
 
-// LeaveProject requests or completes leaving a project.
-// A cooldown period applies before stake is refunded.
+// LeaveProject either schedules or finalizes an exit, blocking folks with active payout locks.
+// Example payload: LeaveProject(strptr("123"))
 //
 //go:wasmexport project_leave
 func LeaveProject(projectID *string) *string {
@@ -250,13 +250,13 @@ func LeaveProject(projectID *string) *string {
 	return strptr("exit finished")
 }
 
+// hasActivePayout checks payout locks to avoid releasing stake while funds are still promised.
 func hasActivePayout(projectID uint64, member dao.Address) bool {
 	return getPayoutLockCount(projectID, member) > 0
 }
 
-// AddFunds transfers additional tokens to a project.
-// Depending on configuration, funds are either added to
-// the project treasury or the member's stake.
+// AddFunds handles the double-path deposit (treasury vs stake) and still validates asset + transfer.allow.
+// Example payload: AddFunds(strptr("7|1"))
 //
 //go:wasmexport project_funds
 func AddFunds(payload *string) *string {
@@ -308,8 +308,7 @@ func AddFunds(payload *string) *string {
 	return strptr("funds added")
 }
 
-// getMember retrieves a member from the project's membership map.
-// Aborts if the given user is not a member.
+// getMember fetches the cached member or aborts with a readable adress on failure.
 func getMember(projectID uint64, user dao.Address) dao.Member {
 	member, ok := loadMember(projectID, user)
 	if !ok {
@@ -318,8 +317,8 @@ func getMember(projectID uint64, user dao.Address) dao.Member {
 	return *member
 }
 
-// TransferProjectOwnership changes project ownership to a new member.
-// The caller must be the current owner, and the new owner must be a member.
+// TransferProjectOwnership lets the owner hand over control, but we enforce the target is still a member.
+// Example payload: TransferProjectOwnership(strptr("5|hive:alice"))
 //
 //go:wasmexport project_transfer
 func TransferProjectOwnership(payload *string) *string {
@@ -357,8 +356,8 @@ func TransferProjectOwnership(payload *string) *string {
 	return strptr("ownership transferred")
 }
 
-// EmergencyPauseImmediate pauses or unpauses a project immediately.
-// Only the owner may invoke this action.
+// EmergencyPauseImmediate is the safety valve so owners can halt stuff without waiting for proposals.
+// Example payload: EmergencyPauseImmediate(strptr("5|false"))
 //
 //go:wasmexport project_pause
 func EmergencyPauseImmediate(payload *string) *string {

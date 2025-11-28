@@ -24,6 +24,7 @@ var heapStart = uintptr(unsafe.Pointer(&heapStartSymbol))
 // https://github.com/tinygo-org/tinygo/blob/2a76ceb7dd5ea5a834ec470b724882564d9681b3/src/runtime/arch_tinygowasm.go#L34
 //
 //export llvm.wasm.memory.size.i32
+// wasm_memory_size proxies the wasm host intrinsic that returns current page count.
 func wasm_memory_size(index int32) int32
 
 // https://github.com/tinygo-org/tinygo/blob/2a76ceb7dd5ea5a834ec470b724882564d9681b3/src/runtime/arch_tinygowasm.go#L34
@@ -49,6 +50,8 @@ const gcFrees = 0
 //export llvm.trap
 func trap()
 
+// Alloc is exposed to wasm so TinyGo runtime can reserve more linear memory on demand.
+// Example payload: runtime.Alloc(64)
 //go:wasmexport alloc
 func Alloc(size uintptr) unsafe.Pointer {
 	return alloc(size, unsafe.Pointer(nil))
@@ -59,6 +62,7 @@ func Alloc(size uintptr) unsafe.Pointer {
 //
 //go:noinline
 //go:linkname alloc runtime.alloc
+// alloc is the simplest bump allocator ever: it just moves heapptr forward forever.
 func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 	// TODO: this can be optimized by not casting between pointers and ints so
 	// much. And by using platform-native data types (e.g. *uint8 for 8-bit
@@ -83,6 +87,7 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 }
 
 //go:inline
+// zero_new_alloc wipes the freshly allocated chunk so TinyGo code doesn't see random data.
 func zero_new_alloc(ptr unsafe.Pointer, size uintptr) {
 	memzero(ptr, size)
 }
@@ -112,6 +117,8 @@ func memzero(ptr unsafe.Pointer, size uintptr)
 // This can be exported to wasm if needed like this: //go:wasmexport realloc
 //
 //go:linkname realloc runtime.realloc
+// realloc just allocates a fresh chunk, copies bytes and ignores freeing the old area.
+// Example payload: runtime.realloc(ptr, 128)
 func realloc(ptr unsafe.Pointer, size uintptr) unsafe.Pointer {
 	newAlloc := alloc(size, nil)
 	if ptr == nil {
@@ -125,14 +132,13 @@ func realloc(ptr unsafe.Pointer, size uintptr) unsafe.Pointer {
 }
 
 //go:linkname free runtime.free
+// free is intentionally a no-op since this leaking GC never reclaims memory.
 func free(ptr unsafe.Pointer) {
 	// Memory is never freed.
 }
 
-// ReadMemStats populates m with memory statistics.
-//
-// The returned memory statistics are up to date as of the
-// call to ReadMemStats. This would not do GC implicitly for you.
+// ReadMemStats fills the standard runtime.MemStats struct with the few counters we track in wasm land.
+// Example payload: runtime.ReadMemStats(&stats)
 //
 //go:linkname ReadMemStats runtime.ReadMemStats
 func ReadMemStats(m *realRuntime.MemStats) {
@@ -152,15 +158,20 @@ func ReadMemStats(m *realRuntime.MemStats) {
 }
 
 //go:linkname GC runtime.GC
+// GC does nothing in this leaking allocator but keeps the runtime satisfied.
+// Example payload: runtime.GC()
 func GC() {
 	// No-op.
 }
 
+// SetFinalizer exists for API compatibility but we drop the callback since nothing is freed.
+// Example payload: runtime.SetFinalizer(obj, nil)
 func SetFinalizer(obj interface{}, finalizer interface{}) {
 	// No-op.
 }
 
 //go:linkname initHeap runtime.initHeap
+// initHeap resets the bump pointer before user code runs.
 func initHeap() {
 	// preinit() may have moved heapStart; reset heapptr
 	heapptr = heapStart
@@ -178,8 +189,10 @@ func initHeap() {
 const wasmMemoryIndex = 0
 
 //export llvm.wasm.memory.grow.i32
+// wasm_memory_grow requests delta pages from the wasm runtime.
 func wasm_memory_grow(index int32, delta int32) int32
 
+// growHeap asks the wasm runtime for another page and updates heapEnd accordingly.
 func growHeap() bool {
 	// Grow memory by the available size, which means the heap size is doubled.
 	memorySize := wasm_memory_size(wasmMemoryIndex)
@@ -195,6 +208,7 @@ func growHeap() bool {
 	return true
 }
 
+// align rounds the pointer up to 16 bytes so even 128-bit types stay happy.
 func align(ptr uintptr) uintptr {
 	// Align to 16, which is the alignment of max_align_t:
 	// https://godbolt.org/z/dYqTsWrGq

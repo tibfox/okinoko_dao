@@ -7,11 +7,7 @@ import (
 	"strconv"
 )
 
-// emitJoinedEvent logs an event indicating that a member has joined a project.
-//
-// The event is recorded in the format:
-//
-//	MemberJoined|id:<projectId>|by:<memberAddress>
+// emitJoinedEvent writes a tiny "mj" log so watchers know someone fresh just joined the project adress.
 func emitJoinedEvent(projectId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
 		"mj|id:%d|by:%s",
@@ -20,11 +16,7 @@ func emitJoinedEvent(projectId uint64, memberAddress string) {
 	))
 }
 
-// emitLeaveEvent logs an event indicating that a member has left a project.
-//
-// The event is recorded in the format:
-//
-//	MemberLeft|id:<projectId>|by:<memberAddress>
+// emitLeaveEvent mirrors the join ping but signals a seat freed up inside the dao.
 func emitLeaveEvent(projectId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
 		"ml|id:%d|by:%s",
@@ -33,11 +25,7 @@ func emitLeaveEvent(projectId uint64, memberAddress string) {
 	))
 }
 
-// emitProjectCreatedEvent logs an event indicating that a new project was created.
-//
-// The event is recorded in the format:
-//
-//	ProjectCreated|id:<projectId>|by:<createdByAddress>
+// emitProjectCreatedEvent gives explorers a neat ping without scanning full storage diffs.
 func emitProjectCreatedEvent(projectId uint64, createdByAddress string) {
 	sdk.Log(fmt.Sprintf(
 		"dc|id:%d|by:%s",
@@ -46,11 +34,7 @@ func emitProjectCreatedEvent(projectId uint64, createdByAddress string) {
 	))
 }
 
-// emitProposalCreatedEvent logs an event when a proposal is created by a member.
-//
-// The event is recorded in the format:
-//
-//	ProposalCreated|id:<proposalId>|by:<memberAddress>
+// emitProposalCreatedEvent keeps observers updated with a short pc line for every new idea.
 func emitProposalCreatedEvent(proposalId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
 		"pc|id:%d|by:%s",
@@ -59,11 +43,7 @@ func emitProposalCreatedEvent(proposalId uint64, memberAddress string) {
 	))
 }
 
-// emitProposalStateChangedEvent logs a state change for a given proposal.
-//
-// The event is recorded in the format:
-//
-//	ProposalState|id:<proposalId>|state:<proposalState>
+// emitProposalStateChangedEvent is the swiss army knife log entry for any state flip.
 func emitProposalStateChangedEvent(proposalId uint64, proposalState dao.ProposalState) {
 	sdk.Log(fmt.Sprintf(
 		"ps|id:%d|s:%s",
@@ -72,6 +52,7 @@ func emitProposalStateChangedEvent(proposalId uint64, proposalState dao.Proposal
 	))
 }
 
+// emitProposalExecutionDelayEvent logs when a passed poll becomes executable so runners can queue it.
 func emitProposalExecutionDelayEvent(projectId uint64, proposalId uint64, readyAt int64) {
 	sdk.Log(fmt.Sprintf(
 		"px|pId:%d|prId:%d|ready:%s",
@@ -81,11 +62,7 @@ func emitProposalExecutionDelayEvent(projectId uint64, proposalId uint64, readyA
 	))
 }
 
-// emitProposalResultEvent logs the final result of a proposal within a project.
-//
-// The event is recorded in the format:
-//
-//	ProposalResult|projectId:<projectId>|proposalId:<proposalId>|result:<result>
+// emitProposalResultEvent leaves a short hint whether funds moved or config toggled after execution.
 func emitProposalResultEvent(projectId uint64, proposalId uint64, result string) {
 	sdk.Log(fmt.Sprintf(
 		"pr|pId:%d|prId:%d|r:%s",
@@ -95,6 +72,7 @@ func emitProposalResultEvent(projectId uint64, proposalId uint64, result string)
 	))
 }
 
+// emitProposalConfigUpdatedEvent spells out field diffs so auditors can track sensitive flips.
 func emitProposalConfigUpdatedEvent(projectId uint64, proposalId uint64, field string, old string, new string) {
 	sdk.Log(fmt.Sprintf(
 		"pm|pId:%d|prId:%d|f:%s|old:%s|new:%s",
@@ -106,11 +84,7 @@ func emitProposalConfigUpdatedEvent(projectId uint64, proposalId uint64, field s
 	))
 }
 
-// emitVoteCasted logs a vote cast for a proposal by a member.
-//
-// The event is recorded in the format:
-//
-//	Vote|id:<proposalId>|by:<voter>|choices:<choices>|weight:<weight>
+// emitVoteCasted includes raw choice indexes plus weight so quorum math can be replayed from logs only.
 func emitVoteCasted(proposalId uint64, voter string, choices []uint, weight float64) {
 	sdk.Log(fmt.Sprintf(
 		"v|id:%d|by:%s|cs:%s|w:%f",
@@ -121,11 +95,7 @@ func emitVoteCasted(proposalId uint64, voter string, choices []uint, weight floa
 	))
 }
 
-// emitFundsAdded logs when funds are added to a project, optionally staking them.
-//
-// The event is recorded in the format:
-//
-//	AddFunds|id:<projectId>|by:<addedByAddress>|amount:<amount>|asset:<asset>|stake:<toStake>
+// emitFundsAdded tells indexing bots whether the transfer beefed up treasury or user stake via one bool char.
 func emitFundsAdded(projectId uint64, addedByAddress string, amount float64, asset string, toStake bool) {
 	sdk.Log(fmt.Sprintf(
 		"af|id:%d|by:%s|am:%f|as:%s|s:%s",
@@ -137,13 +107,7 @@ func emitFundsAdded(projectId uint64, addedByAddress string, amount float64, ass
 	))
 }
 
-// emitFundsRemoved logs when funds are removed from a project, optionally from staking.
-//
-// The event is recorded in the format:
-//
-//	RemoveFunds|id:<projectId>|to:<removedToAddress>|amount:<amount>|asset:<asset>|fromStake:<fromStake>
-//
-// Note: "RmoveFunds" in the log string appears to be a typo and should likely be corrected to "RemoveFunds".
+// emitFundsRemoved mirrors the add log but lets us trace payouts and unstaking in a single terse line.
 func emitFundsRemoved(projectId uint64, removedToAddress string, amount float64, asset string, fromStake bool) {
 	sdk.Log(fmt.Sprintf(
 		"rf|id:%d|to:%s|am:%f|as:%s|fs:%s",

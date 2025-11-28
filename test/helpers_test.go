@@ -50,6 +50,7 @@ func CallContract(t *testing.T, ct *test_utils.ContractTest, action string, payl
 	return callContractWithTimestamp(t, ct, action, payload, intents, authUser, expectedResult, maxGas, defaultTimestamp)
 }
 
+// CallContractAt executes a call but lets tests override the timestamp for expiry checks.
 func CallContractAt(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (stateEngine.TxResult, uint, map[string][]string) {
 	if timestamp == "" {
 		timestamp = defaultTimestamp
@@ -57,6 +58,7 @@ func CallContractAt(t *testing.T, ct *test_utils.ContractTest, action string, pa
 	return callContractWithTimestamp(t, ct, action, payload, intents, authUser, expectedResult, maxGas, timestamp)
 }
 
+// callContractWithTimestamp performs the real invocation, logging gas usage and asserting outcome.
 func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (stateEngine.TxResult, uint, map[string][]string) {
 	if timestamp == "" {
 		timestamp = defaultTimestamp
@@ -114,11 +116,12 @@ func PrintErrorIfFailed(result stateEngine.TxResult) {
 	}
 }
 
-// Payload helpers convert encoded bytes to contract payloads.
+// PayloadString wraps a Go string into JSON the contract expects.
 func PayloadString(val string) json.RawMessage {
 	return json.RawMessage([]byte(strconv.Quote(val)))
 }
 
+// PayloadUint64 converts an id to its ASCII digits for wasm call payloads.
 func PayloadUint64(val uint64) json.RawMessage {
 	return json.RawMessage([]byte(strconv.FormatUint(val, 10)))
 }

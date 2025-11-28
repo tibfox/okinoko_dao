@@ -12,10 +12,13 @@ type binWriter struct {
 	buf bytes.Buffer
 }
 
+// newWriter spins up a fresh writer so we dont leak old bytes between encodes.
 func newWriter() *binWriter { return &binWriter{} }
 
+// bytes returns the accumulated buffer, tiny helper but keeps code tidy.
 func (w *binWriter) bytes() []byte { return w.buf.Bytes() }
 
+// writeBool squashes bools into a single byte flag for deterministic payloads.
 func (w *binWriter) writeBool(v bool) {
 	if v {
 		w.buf.WriteByte(1)
@@ -24,41 +27,49 @@ func (w *binWriter) writeBool(v bool) {
 	}
 }
 
+// writeUint64 writes big endian numbers so tooling can read them without guessing.
 func (w *binWriter) writeUint64(v uint64) {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], v)
 	w.buf.Write(b[:])
 }
 
+// writeInt64 reuses the uint routine since casting keeps the sign bits intact.
 func (w *binWriter) writeInt64(v int64) {
 	w.writeUint64(uint64(v))
 }
 
+// writeFloat64 converts doubles to IEEE bits so we dont lose precision on wasm.
 func (w *binWriter) writeFloat64(v float64) {
 	w.writeUint64(math.Float64bits(v))
 }
 
+// writeVarUint uses varints to keep counts and lens compact.
 func (w *binWriter) writeVarUint(v uint64) {
 	var tmp [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(tmp[:], v)
 	w.buf.Write(tmp[:n])
 }
 
+// writeVarInt mirrors writeVarUint but keeps sign info for deltas.
 func (w *binWriter) writeVarInt(v int64) {
 	var tmp [binary.MaxVarintLen64]byte
 	n := binary.PutVarint(tmp[:], v)
 	w.buf.Write(tmp[:n])
 }
 
+// writeAmount keeps amount scaling consistent via a single call site.
 func (w *binWriter) writeAmount(v Amount) {
 	w.writeInt64(int64(v))
 }
 
+// writeString prefixes its length then dumps UTF-8 directly.
 func (w *binWriter) writeString(s string) {
 	w.writeVarUint(uint64(len(s)))
 	w.buf.WriteString(s)
 }
 
+// writeOptionalString writes a presence bit so decoders know if data follows.
 func (w *binWriter) writeOptionalString(ptr *string) {
 	if ptr == nil {
 		w.writeBool(false)
@@ -68,6 +79,7 @@ func (w *binWriter) writeOptionalString(ptr *string) {
 	w.writeString(*ptr)
 }
 
+// writeOptionalUint64 does the same dance for numeric ids.
 func (w *binWriter) writeOptionalUint64(ptr *uint64) {
 	if ptr == nil {
 		w.writeBool(false)
@@ -77,6 +89,7 @@ func (w *binWriter) writeOptionalUint64(ptr *uint64) {
 	w.writeUint64(*ptr)
 }
 
+// writeStringMap iterates keys in sorted order so binary blobs are stable.
 func (w *binWriter) writeStringMap(m map[string]string) {
 	if m == nil {
 		w.writeVarUint(0)
@@ -94,14 +107,17 @@ func (w *binWriter) writeStringMap(m map[string]string) {
 	}
 }
 
+// writeAddress canonicalizes the address before writing, so later parsing is easyer.
 func (w *binWriter) writeAddress(a Address) {
 	w.writeString(addressString(a))
 }
 
+// writeAsset just dumps the ticker string, nothing fancy but consistent.
 func (w *binWriter) writeAsset(a Asset) {
 	w.writeString(assetString(a))
 }
 
+// encodeProjectConfig squeezes every config bit into the binary form, kinda verbose but fast.
 func encodeProjectConfig(w *binWriter, cfg *ProjectConfig) {
 	w.buf.WriteByte(byte(cfg.VotingSystem))
 	w.writeFloat64(cfg.ThresholdPercent)
@@ -118,6 +134,7 @@ func encodeProjectConfig(w *binWriter, cfg *ProjectConfig) {
 	w.writeBool(cfg.ProposalsMembersOnly)
 }
 
+// encodeMember serializes member lifecycle data for caching and rehydrating later.
 func encodeMember(w *binWriter, m *Member) {
 	w.writeAddress(m.Address)
 	w.writeAmount(m.Stake)
@@ -127,18 +144,22 @@ func encodeMember(w *binWriter, m *Member) {
 	w.writeInt64(m.Reputation)
 }
 
+// EncodeMember packs a dao.Member into bytes so storage stays lean and no json noise leaks.
+// Example payload: EncodeMember(&Member{Address: newAddress("hive:alice"), Stake: FloatToAmount(3.5)})
 func EncodeMember(m *Member) []byte {
 	w := newWriter()
 	encodeMember(w, m)
 	return w.bytes()
 }
 
+// encodeProposalOption captures text, cumulative weight and unique voter count.
 func encodeProposalOption(w *binWriter, opt *ProposalOption) {
 	w.writeString(opt.Text)
 	w.writeAmount(opt.WeightTotal)
 	w.writeUint64(opt.VoterCount)
 }
 
+// encodeProposalOutcome first toggles presence, then writes meta map and payout map sorted.
 func encodeProposalOutcome(w *binWriter, out *ProposalOutcome) {
 	if out == nil {
 		w.writeBool(false)
@@ -162,7 +183,8 @@ func encodeProposalOutcome(w *binWriter, out *ProposalOutcome) {
 	}
 }
 
-// EncodeProject serializes a project to a compact binary form.
+// EncodeProject serializes the entire dao.Project into deterministic bytes for storage and proofs.
+// Example payload: EncodeProject(&Project{ID: 7, Name: "Tiny DAO", Funds: FloatToAmount(2.5)})
 func EncodeProject(prj *Project) []byte {
 	w := newWriter()
 	w.writeUint64(prj.ID)
@@ -180,7 +202,8 @@ func EncodeProject(prj *Project) []byte {
 	return w.bytes()
 }
 
-// EncodeProposal serializes a proposal.
+// EncodeProposal turns a dao.Proposal into bytes so we can persist votes without json overhead.
+// Example payload: EncodeProposal(&Proposal{ID: 3, ProjectID: 1, Name: "add funds"})
 func EncodeProposal(prpsl *Proposal) []byte {
 	w := newWriter()
 	w.writeUint64(prpsl.ID)
@@ -203,6 +226,8 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	return w.bytes()
 }
 
+// EncodeCreateProjectArgs packs the human payload for project_create into deterministic bytes.
+// Example payload: EncodeCreateProjectArgs(&CreateProjectArgs{Name: "My Coop", ProjectConfig: ProjectConfig{ThresholdPercent:60}})
 func EncodeCreateProjectArgs(args *CreateProjectArgs) []byte {
 	w := newWriter()
 	w.writeString(args.Name)
@@ -212,6 +237,8 @@ func EncodeCreateProjectArgs(args *CreateProjectArgs) []byte {
 	return w.bytes()
 }
 
+// EncodeCreateProposalArgs is used in tests/tools to mimic proposal_create payloads.
+// Example payload: EncodeCreateProposalArgs(&CreateProposalArgs{ProjectID:2, OptionsList: []string{"yes","no"}})
 func EncodeCreateProposalArgs(args *CreateProposalArgs) []byte {
 	w := newWriter()
 	w.writeUint64(args.ProjectID)
@@ -227,6 +254,8 @@ func EncodeCreateProposalArgs(args *CreateProposalArgs) []byte {
 	return w.bytes()
 }
 
+// EncodeVoteProposalArgs mirrors the on-chain vote payload format for fuzzing etc.
+// Example payload: EncodeVoteProposalArgs(&VoteProposalArgs{ProposalID:5, Choices: []uint{1,2}})
 func EncodeVoteProposalArgs(args *VoteProposalArgs) []byte {
 	w := newWriter()
 	w.writeUint64(args.ProposalID)
@@ -237,6 +266,8 @@ func EncodeVoteProposalArgs(args *VoteProposalArgs) []byte {
 	return w.bytes()
 }
 
+// EncodeAddFundsArgs lets tooling craft project_funds payloads fast.
+// Example payload: EncodeAddFundsArgs(&AddFundsArgs{ProjectID:9, ToStake:true})
 func EncodeAddFundsArgs(args *AddFundsArgs) []byte {
 	w := newWriter()
 	w.writeUint64(args.ProjectID)
@@ -253,10 +284,12 @@ type binReader struct {
 	pos  int
 }
 
+// newReader wraps raw bytes so we can peek sequentially w/out copying.
 func newReader(data []byte) *binReader {
 	return &binReader{data: data}
 }
 
+// readByte grabs the next byte and bumps the cursor, aborts on EOF.
 func (r *binReader) readByte() (byte, error) {
 	if r.pos >= len(r.data) {
 		return 0, errors.New("unexpected EOF")
@@ -266,6 +299,7 @@ func (r *binReader) readByte() (byte, error) {
 	return b, nil
 }
 
+// readBool restores bools stored via writeBool above.
 func (r *binReader) readBool() (bool, error) {
 	b, err := r.readByte()
 	if err != nil {
@@ -274,6 +308,7 @@ func (r *binReader) readBool() (bool, error) {
 	return b == 1, nil
 }
 
+// readUint64 decodes big endian integers for ids and totals.
 func (r *binReader) readUint64() (uint64, error) {
 	if r.pos+8 > len(r.data) {
 		return 0, errors.New("unexpected EOF")
@@ -283,6 +318,7 @@ func (r *binReader) readUint64() (uint64, error) {
 	return val, nil
 }
 
+// readInt64 simply casts the unsigned read, matching the writer logic.
 func (r *binReader) readInt64() (int64, error) {
 	v, err := r.readUint64()
 	if err != nil {
@@ -291,6 +327,7 @@ func (r *binReader) readInt64() (int64, error) {
 	return int64(v), nil
 }
 
+// readFloat64 flips IEEE bits back into a go float.
 func (r *binReader) readFloat64() (float64, error) {
 	v, err := r.readUint64()
 	if err != nil {
@@ -299,6 +336,7 @@ func (r *binReader) readFloat64() (float64, error) {
 	return math.Float64frombits(v), nil
 }
 
+// readVarUint undoes the compact varint encoding for lengths/counts.
 func (r *binReader) readVarUint() (uint64, error) {
 	val, n := binary.Uvarint(r.data[r.pos:])
 	if n <= 0 {
@@ -308,6 +346,7 @@ func (r *binReader) readVarUint() (uint64, error) {
 	return val, nil
 }
 
+// readVarInt mirrors varuint for signed values.
 func (r *binReader) readVarInt() (int64, error) {
 	val, n := binary.Varint(r.data[r.pos:])
 	if n <= 0 {
@@ -317,6 +356,7 @@ func (r *binReader) readVarInt() (int64, error) {
 	return val, nil
 }
 
+// readAmount rebuilds a dao.Amount using the int64 path so scaling stays synced.
 func (r *binReader) readAmount() (Amount, error) {
 	val, err := r.readInt64()
 	if err != nil {
@@ -325,6 +365,7 @@ func (r *binReader) readAmount() (Amount, error) {
 	return Amount(val), nil
 }
 
+// readString reads the varint length then slices out the utf8 chunk.
 func (r *binReader) readString() (string, error) {
 	l, err := r.readVarUint()
 	if err != nil {
@@ -338,6 +379,7 @@ func (r *binReader) readString() (string, error) {
 	return s, nil
 }
 
+// readOptionalString checks the presence byte, then returns pointer so callers know nil.
 func (r *binReader) readOptionalString() (*string, error) {
 	ok, err := r.readBool()
 	if err != nil {
@@ -353,6 +395,7 @@ func (r *binReader) readOptionalString() (*string, error) {
 	return &str, nil
 }
 
+// readOptionalUint64 is used for optional nft ids and similar numbers.
 func (r *binReader) readOptionalUint64() (*uint64, error) {
 	ok, err := r.readBool()
 	if err != nil {
@@ -368,6 +411,7 @@ func (r *binReader) readOptionalUint64() (*uint64, error) {
 	return &val, nil
 }
 
+// readStringMap loops len times and rebuilds the deterministic meta map.
 func (r *binReader) readStringMap() (map[string]string, error) {
 	count, err := r.readVarUint()
 	if err != nil {
@@ -391,6 +435,7 @@ func (r *binReader) readStringMap() (map[string]string, error) {
 	return result, nil
 }
 
+// decodeProjectConfig is the inverse of encodeProjectConfig and keeps same field order.
 func decodeProjectConfig(r *binReader) (ProjectConfig, error) {
 	var cfg ProjectConfig
 	b, err := r.readByte()
@@ -437,6 +482,7 @@ func decodeProjectConfig(r *binReader) (ProjectConfig, error) {
 	return cfg, nil
 }
 
+// decodeMember reads back the fields emitted by encodeMember in exact order.
 func decodeMember(r *binReader) (Member, error) {
 	var m Member
 	addr, err := r.readString()
@@ -462,6 +508,8 @@ func decodeMember(r *binReader) (Member, error) {
 	return m, nil
 }
 
+// DecodeMember is handy for tests that need to inspect stored members quickly.
+// Example payload: DecodeMember(EncodeMember(&Member{Address:newAddress("hive:tester")}))
 func DecodeMember(data []byte) (*Member, error) {
 	r := newReader(data)
 	m, err := decodeMember(r)
@@ -471,6 +519,7 @@ func DecodeMember(data []byte) (*Member, error) {
 	return &m, nil
 }
 
+// decodeProposalOption reconstructs the text option plus running vote totals.
 func decodeProposalOption(r *binReader) (ProposalOption, error) {
 	var opt ProposalOption
 	var err error
@@ -486,12 +535,16 @@ func decodeProposalOption(r *binReader) (ProposalOption, error) {
 	return opt, nil
 }
 
+// EncodeProposalOption serializes a single option so we can persist it separately in state.
+// Example payload: EncodeProposalOption(&ProposalOption{Text: "ship it", WeightTotal: FloatToAmount(12)})
 func EncodeProposalOption(opt *ProposalOption) []byte {
 	w := newWriter()
 	encodeProposalOption(w, opt)
 	return w.bytes()
 }
 
+// DecodeProposalOption lets tests read back stored vote options.
+// Example payload: DecodeProposalOption(EncodeProposalOption(&ProposalOption{Text:"x"}))
 func DecodeProposalOption(data []byte) (*ProposalOption, error) {
 	r := newReader(data)
 	opt, err := decodeProposalOption(r)
@@ -501,6 +554,7 @@ func DecodeProposalOption(data []byte) (*ProposalOption, error) {
 	return &opt, nil
 }
 
+// decodeProposalOutcome rebuilds optional meta and payout maps for proposals.
 func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	exists, err := r.readBool()
 	if err != nil {
@@ -535,6 +589,8 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	}, nil
 }
 
+// DecodeProject lets off-chain tools verify stored projects without reimplementing codec.
+// Example payload: DecodeProject(EncodeProject(&Project{ID:42, Name:"dao"}))
 func DecodeProject(data []byte) (*Project, error) {
 	r := newReader(data)
 	prj := &Project{}
@@ -582,14 +638,16 @@ func DecodeProject(data []byte) (*Project, error) {
 	return prj, nil
 }
 
-// EncodeProjectConfig serializes a project configuration block.
+// EncodeProjectConfig serializes config structs so they can be cached outside the main project blob.
+// Example payload: EncodeProjectConfig(&ProjectConfig{ThresholdPercent:55, MembershipNftPayloadFormat: "{nft}|{caller}"})
 func EncodeProjectConfig(cfg *ProjectConfig) []byte {
 	w := newWriter()
 	encodeProjectConfig(w, cfg)
 	return w.bytes()
 }
 
-// DecodeProjectConfig deserializes a project configuration.
+// DecodeProjectConfig reverses the above encoding and is mostly used in tests/migration tools.
+// Example payload: DecodeProjectConfig(EncodeProjectConfig(&ProjectConfig{ProposalCost:1.5}))
 func DecodeProjectConfig(data []byte) (*ProjectConfig, error) {
 	r := newReader(data)
 	cfg, err := decodeProjectConfig(r)
@@ -599,7 +657,8 @@ func DecodeProjectConfig(data []byte) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
-// EncodeProjectMeta serializes project metadata.
+// EncodeProjectMeta stores the light metadata slice so mutations dont touch finance bytes.
+// Example payload: EncodeProjectMeta(&ProjectMeta{Name:"Club", Description:"all friends"})
 func EncodeProjectMeta(meta *ProjectMeta) []byte {
 	w := newWriter()
 	w.writeAddress(meta.Owner)
@@ -611,7 +670,8 @@ func EncodeProjectMeta(meta *ProjectMeta) []byte {
 	return w.bytes()
 }
 
-// DecodeProjectMeta deserializes project metadata.
+// DecodeProjectMeta converts state bytes back into human fields for queries.
+// Example payload: DecodeProjectMeta(EncodeProjectMeta(&ProjectMeta{Name:"test"}))
 func DecodeProjectMeta(data []byte) (*ProjectMeta, error) {
 	r := newReader(data)
 	var meta ProjectMeta
@@ -639,7 +699,8 @@ func DecodeProjectMeta(data []byte) (*ProjectMeta, error) {
 	return &meta, nil
 }
 
-// EncodeProjectFinance serializes treasury/staking aggregates.
+// EncodeProjectFinance handles the frequently updated treasury counters separately.
+// Example payload: EncodeProjectFinance(&ProjectFinance{Funds:FloatToAmount(10), MemberCount:3})
 func EncodeProjectFinance(fin *ProjectFinance) []byte {
 	w := newWriter()
 	w.writeAmount(fin.Funds)
@@ -649,7 +710,8 @@ func EncodeProjectFinance(fin *ProjectFinance) []byte {
 	return w.bytes()
 }
 
-// DecodeProjectFinance deserializes finance data.
+// DecodeProjectFinance lets analytics read the compact finance snapshot.
+// Example payload: DecodeProjectFinance(EncodeProjectFinance(&ProjectFinance{FundsAsset:newAsset("hive")}))
 func DecodeProjectFinance(data []byte) (*ProjectFinance, error) {
 	r := newReader(data)
 	var fin ProjectFinance
@@ -671,6 +733,8 @@ func DecodeProjectFinance(data []byte) (*ProjectFinance, error) {
 	return &fin, nil
 }
 
+// DecodeProposal lets governance tooling inspect stored proposals with one helper call.
+// Example payload: DecodeProposal(EncodeProposal(&Proposal{ID:11, ProjectID:2}))
 func DecodeProposal(data []byte) (*Proposal, error) {
 	r := newReader(data)
 	prpsl := &Proposal{}
@@ -739,6 +803,8 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 	return prpsl, nil
 }
 
+// DecodeCreateProjectArgs is mostly for integration tests that roundtrip payload encoding.
+// Example payload: DecodeCreateProjectArgs(EncodeCreateProjectArgs(&CreateProjectArgs{Name:"coop"}))
 func DecodeCreateProjectArgs(data []byte) (*CreateProjectArgs, error) {
 	r := newReader(data)
 	args := &CreateProjectArgs{}
@@ -758,6 +824,8 @@ func DecodeCreateProjectArgs(data []byte) (*CreateProjectArgs, error) {
 	return args, nil
 }
 
+// DecodeCreateProposalArgs follows the same idea but for proposal payloads.
+// Example payload: DecodeCreateProposalArgs(EncodeCreateProposalArgs(&CreateProposalArgs{ProjectID:3}))
 func DecodeCreateProposalArgs(data []byte) (*CreateProposalArgs, error) {
 	r := newReader(data)
 	args := &CreateProposalArgs{}
@@ -793,6 +861,8 @@ func DecodeCreateProposalArgs(data []byte) (*CreateProposalArgs, error) {
 	return args, nil
 }
 
+// DecodeVoteProposalArgs decodes the wasm vote payload held in tests fixtures.
+// Example payload: DecodeVoteProposalArgs(EncodeVoteProposalArgs(&VoteProposalArgs{ProposalID:4, Choices:[]uint{1}}))
 func DecodeVoteProposalArgs(data []byte) (*VoteProposalArgs, error) {
 	r := newReader(data)
 	args := &VoteProposalArgs{}
@@ -815,6 +885,8 @@ func DecodeVoteProposalArgs(data []byte) (*VoteProposalArgs, error) {
 	return args, nil
 }
 
+// DecodeAddFundsArgs mirrors encode helper for funds payload validation.
+// Example payload: DecodeAddFundsArgs(EncodeAddFundsArgs(&AddFundsArgs{ProjectID:1, ToStake:false}))
 func DecodeAddFundsArgs(data []byte) (*AddFundsArgs, error) {
 	r := newReader(data)
 	args := &AddFundsArgs{}

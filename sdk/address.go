@@ -38,10 +38,14 @@ const (
 
 type Address string
 
+// String returns the literal representation (like hive:alice) of the address.
+// Example payload: sdk.Address("hive:foo").String()
 func (a Address) String() string {
 	return string(a)
 }
 
+// Domain quickly checks the prefix to guess if we deal with user/contract/system domain.
+// Example payload: sdk.Address("contract:okinoko").Domain()
 func (a Address) Domain() AddressDomain {
 	if strings.HasPrefix(a.String(), "system:") {
 		return AddressDomainSystem
@@ -52,6 +56,8 @@ func (a Address) Domain() AddressDomain {
 	return AddressDomainUser
 }
 
+// Type inspects the DID prefix to categorize the address (evm, key, hive,...).
+// Example payload: sdk.Address("did:pkh:eip155").Type()
 func (a Address) Type() AddressType {
 	if strings.HasPrefix(a.String(), "did:pkh:eip155") {
 		return AddressTypeEVM
@@ -67,6 +73,8 @@ func (a Address) Type() AddressType {
 	//TODO: Detect BLS address type, though it is not used or planned to be supported.
 }
 
+// IsValid returns false if the address type detection failed, used as a light sanity check.
+// Example payload: sdk.Address("foo").IsValid()
 func (a Address) IsValid() bool {
 	if a.Type() == AddressTypeUnknown {
 		return false

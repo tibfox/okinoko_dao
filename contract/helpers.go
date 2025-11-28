@@ -28,6 +28,7 @@ const (
 	kVoteReceipt       byte = 0x20
 )
 
+// packU64LEInline sprinkles a uint64 into dst in little-endian order so our keys stay compact.
 func packU64LEInline(x uint64, dst []byte) {
 	dst[0] = byte(x)
 	dst[1] = byte(x >> 8)
@@ -39,6 +40,7 @@ func packU64LEInline(x uint64, dst []byte) {
 	dst[7] = byte(x >> 56)
 }
 
+// packU32LEInline mirrors the 64-bit helper but for smaller option indexes.
 func packU32LEInline(x uint32, dst []byte) {
 	dst[0] = byte(x)
 	dst[1] = byte(x >> 8)
@@ -46,6 +48,7 @@ func packU32LEInline(x uint32, dst []byte) {
 	dst[3] = byte(x >> 24)
 }
 
+// packU64LE appends the encoded number to dst and returns the new slice.
 func packU64LE(x uint64, dst []byte) []byte {
 	return append(dst,
 		byte(x),
@@ -59,7 +62,7 @@ func packU64LE(x uint64, dst []byte) []byte {
 	)
 }
 
-// currentEnv returns the cached environment, loading it from the host if needed.
+// currentEnv caches the env per tx.id so we dont poke the host api every few lines.
 func currentEnv() *sdk.Env {
 	var currentTx string
 	if txPtr := sdk.GetEnvKey("tx.id"); txPtr != nil {
@@ -74,7 +77,7 @@ func currentEnv() *sdk.Env {
 	return &cachedEnv
 }
 
-// currentIntents returns intents from the cached environment.
+// currentIntents is just a tiny helper to access intents already pulled above.
 func currentIntents() []sdk.Intent {
 	return currentEnv().Intents
 }
@@ -144,6 +147,7 @@ func projectKey(id uint64) string {
 	return string(buf[:])
 }
 
+// projectConfigKey uses prefix 0x02 so configs sit next to meta but not collide.
 func projectConfigKey(id uint64) string {
 	var buf [9]byte
 	buf[0] = kProjectConfig
@@ -151,6 +155,7 @@ func projectConfigKey(id uint64) string {
 	return string(buf[:])
 }
 
+// projectFinanceKey sits in prefix 0x03 for quick aggregated lookups.
 func projectFinanceKey(id uint64) string {
 	var buf [9]byte
 	buf[0] = kProjectFinance
@@ -158,6 +163,7 @@ func projectFinanceKey(id uint64) string {
 	return string(buf[:])
 }
 
+// memberKey mixes project id plus address bytes to avoid nested maps in host storage.
 func memberKey(projectID uint64, addr dao.Address) string {
 	addrStr := dao.AddressToString(addr)
 	buf := make([]byte, 0, 1+8+len(addrStr))
@@ -167,6 +173,7 @@ func memberKey(projectID uint64, addr dao.Address) string {
 	return string(buf)
 }
 
+// payoutLockKey counts pending payouts for a member so we can block exits safely.
 func payoutLockKey(projectID uint64, addr dao.Address) string {
 	addrStr := dao.AddressToString(addr)
 	buf := make([]byte, 0, 1+8+len(addrStr))
@@ -177,6 +184,7 @@ func payoutLockKey(projectID uint64, addr dao.Address) string {
 }
 
 // proposalKey builds a storage key string for a proposal by ID.
+// proposalKey encodes id under 0x10 prefix keeping metadata lumps contiguous.
 func proposalKey(id uint64) string {
 	var buf [9]byte
 	buf[0] = kProposalMeta
@@ -184,6 +192,7 @@ func proposalKey(id uint64) string {
 	return string(buf[:])
 }
 
+// proposalOptionKey stores options sequentially under 0x11 prefix.
 func proposalOptionKey(id uint64, idx uint32) string {
 	var buf [13]byte
 	buf[0] = kProposalOption
@@ -208,6 +217,7 @@ func nowUnix() int64 {
 	return time.Now().Unix()
 }
 
+// parseTimestamp accepts unix seconds or iso-ish strings since the env flips formats sometimes.
 func parseTimestamp(val string) (int64, bool) {
 	if v, err := strconv.ParseInt(val, 10, 64); err == nil {
 		return v, true
@@ -225,6 +235,7 @@ func parseTimestamp(val string) (int64, bool) {
 // Payload decoding helpers
 ///////////////////////////////////////////////////
 
+// decodeCreateProjectArgs unpacks the pipe-delimited payload used for project_create calls.
 func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
 	raw := unwrapPayload(payload, "project payload missing")
 	parts := strings.Split(raw, "|")
@@ -277,6 +288,7 @@ func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
 	return args
 }
 
+// decodeCreateProposalArgs splits the string payload and normalizes optional bits like payouts.
 func decodeCreateProposalArgs(payload *string) *dao.CreateProposalArgs {
 	raw := unwrapPayload(payload, "proposal payload missing")
 	parts := strings.Split(raw, "|")
@@ -314,6 +326,7 @@ func decodeCreateProposalArgs(payload *string) *dao.CreateProposalArgs {
 	}
 }
 
+// decodeVoteProposalArgs expects `proposalId|choices` and converts indexes into uint slice.
 func decodeVoteProposalArgs(payload *string) *dao.VoteProposalArgs {
 	raw := unwrapPayload(payload, "vote payload missing")
 	parts := strings.Split(raw, "|")
@@ -328,6 +341,7 @@ func decodeVoteProposalArgs(payload *string) *dao.VoteProposalArgs {
 	}
 }
 
+// decodeAddFundsArgs extracts project id plus staking flag from the user payload.
 func decodeAddFundsArgs(payload *string) *dao.AddFundsArgs {
 	raw := unwrapPayload(payload, "add funds payload missing")
 	parts := strings.Split(raw, "|")
@@ -342,6 +356,7 @@ func decodeAddFundsArgs(payload *string) *dao.AddFundsArgs {
 	}
 }
 
+// unwrapPayload trims quotes and whitespace, aborting if the payload is empty.
 func unwrapPayload(payload *string, errMsg string) string {
 	if payload == nil {
 		sdk.Abort(errMsg)
@@ -366,6 +381,7 @@ func unwrapPayload(payload *string, errMsg string) string {
 	return raw
 }
 
+// saveMember writes both storage and cache copy so repeated reads stay cheap.
 func saveMember(projectID uint64, member *dao.Member) {
 	key := memberKey(projectID, member.Address)
 	data := dao.EncodeMember(member)
@@ -376,6 +392,7 @@ func saveMember(projectID uint64, member *dao.Member) {
 	}
 }
 
+// loadMember tries cache first and decodes wasm bytes when needed.
 func loadMember(projectID uint64, addr dao.Address) (*dao.Member, bool) {
 	key := memberKey(projectID, addr)
 	if cachedMembers != nil {
@@ -399,6 +416,7 @@ func loadMember(projectID uint64, addr dao.Address) (*dao.Member, bool) {
 	return member, true
 }
 
+// deleteMember evicts member state and removes cached clone to avoid stale reads.
 func deleteMember(projectID uint64, addr dao.Address) {
 	key := memberKey(projectID, addr)
 	sdk.StateDeleteObject(key)
@@ -407,6 +425,7 @@ func deleteMember(projectID uint64, addr dao.Address) {
 	}
 }
 
+// getPayoutLockCount reads how many pending payouts block withdrawals for this addr.
 func getPayoutLockCount(projectID uint64, addr dao.Address) uint64 {
 	key := payoutLockKey(projectID, addr)
 	ptr := sdk.StateGetObject(key)
@@ -420,12 +439,14 @@ func getPayoutLockCount(projectID uint64, addr dao.Address) uint64 {
 	return val
 }
 
+// incrementPayoutLock bumps the counter when a new payout is tied to the member.
 func incrementPayoutLock(projectID uint64, addr dao.Address) {
 	key := payoutLockKey(projectID, addr)
 	count := getPayoutLockCount(projectID, addr) + 1
 	sdk.StateSetObject(key, strconv.FormatUint(count, 10))
 }
 
+// decrementPayoutLock lowers the counter and deletes key when it reaches zero.
 func decrementPayoutLock(projectID uint64, addr dao.Address) {
 	key := payoutLockKey(projectID, addr)
 	count := getPayoutLockCount(projectID, addr)
@@ -440,6 +461,7 @@ func decrementPayoutLock(projectID uint64, addr dao.Address) {
 	}
 }
 
+// incrementPayoutLocks loops the payout map so each beneficiary gets a lock entry.
 func incrementPayoutLocks(projectID uint64, payout map[dao.Address]dao.Amount) {
 	if payout == nil {
 		return
@@ -449,6 +471,7 @@ func incrementPayoutLocks(projectID uint64, payout map[dao.Address]dao.Amount) {
 	}
 }
 
+// decrementPayoutLocks removes all locks once a proposal outcome resolves.
 func decrementPayoutLocks(projectID uint64, payout map[dao.Address]dao.Amount) {
 	if payout == nil {
 		return
@@ -458,12 +481,14 @@ func decrementPayoutLocks(projectID uint64, payout map[dao.Address]dao.Amount) {
 	}
 }
 
+// saveProposalOption stores each option separately to avoid rewriting the whole proposal blob.
 func saveProposalOption(proposalID uint64, idx uint32, opt *dao.ProposalOption) {
 	key := proposalOptionKey(proposalID, idx)
 	data := dao.EncodeProposalOption(opt)
 	sdk.StateSetObject(key, string(data))
 }
 
+// loadProposalOption decodes a single option and aborts loudly when missing.
 func loadProposalOption(proposalID uint64, idx uint32) *dao.ProposalOption {
 	key := proposalOptionKey(proposalID, idx)
 	ptr := sdk.StateGetObject(key)
@@ -477,6 +502,7 @@ func loadProposalOption(proposalID uint64, idx uint32) *dao.ProposalOption {
 	return opt
 }
 
+// loadProposalOptions iterates indexes and returns a flat slice for tallying.
 func loadProposalOptions(proposalID uint64, count uint32) []dao.ProposalOption {
 	opts := make([]dao.ProposalOption, count)
 	for i := uint32(0); i < count; i++ {
@@ -486,6 +512,7 @@ func loadProposalOptions(proposalID uint64, count uint32) []dao.ProposalOption {
 	return opts
 }
 
+// stateSetIfChanged avoids unnecessary writes so we dont thrash storage fees.
 func stateSetIfChanged(key, value string) {
 	if existing := sdk.StateGetObject(key); existing != nil && *existing == value {
 		return
@@ -493,6 +520,7 @@ func stateSetIfChanged(key, value string) {
 	sdk.StateSetObject(key, value)
 }
 
+// parseVotingSystem accepts friendly strings or digits, defaulting to stake voting for safety.
 func parseVotingSystem(val string) dao.VotingSystem {
 	switch strings.ToLower(strings.TrimSpace(val)) {
 	case "0":
@@ -504,6 +532,7 @@ func parseVotingSystem(val string) dao.VotingSystem {
 	}
 }
 
+// parseFloatField trims the input and aborts with a friendly field name on errors.
 func parseFloatField(val string, field string) float64 {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -516,6 +545,7 @@ func parseFloatField(val string, field string) float64 {
 	return f
 }
 
+// parseUintField is the uint variant used for durations and ids.
 func parseUintField(val string, field string) uint64 {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -528,6 +558,7 @@ func parseUintField(val string, field string) uint64 {
 	return n
 }
 
+// parseBoolField accepts a couple of truthy keywords, defaulting to false for unknown text.
 func parseBoolField(val string) bool {
 	switch strings.ToLower(strings.TrimSpace(val)) {
 	case "1", "true", "yes", "y", "poll":
@@ -537,6 +568,7 @@ func parseBoolField(val string) bool {
 	}
 }
 
+// parseOptionsField splits the list by ';' and trims each option.
 func parseOptionsField(val string) []string {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -553,6 +585,7 @@ func parseOptionsField(val string) []string {
 	return opts
 }
 
+// parseChoiceField allows comma or semicolon separators and returns clean indexes.
 func parseChoiceField(val string) []uint {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -576,6 +609,7 @@ func parseChoiceField(val string) []uint {
 	return choices
 }
 
+// parseMetadataField lets payload authors include semi-colon separated key=value pairs.
 func parseMetadataField(val string) map[string]string {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -603,6 +637,7 @@ func parseMetadataField(val string) map[string]string {
 	return meta
 }
 
+// normalizeProjectConfig ensures configs always have sane fallbacks before persisting.
 func normalizeProjectConfig(cfg *dao.ProjectConfig) {
 	if cfg.VotingSystem == dao.VotingSystemUnspecified {
 		cfg.VotingSystem = dao.VotingSystemStake
@@ -625,6 +660,7 @@ func normalizeProjectConfig(cfg *dao.ProjectConfig) {
 	cfg.MembershipNftPayloadFormat = normalizeMembershipPayloadFormat(cfg.MembershipNftPayloadFormat)
 }
 
+// normalizeOptionalField trims funky placeholders like  so metadata stays clean.
 func normalizeOptionalField(val string) string {
 	val = strings.TrimSpace(val)
 	if val == "" || val == "\"\"" || val == "''" {
@@ -633,6 +669,7 @@ func normalizeOptionalField(val string) string {
 	return val
 }
 
+// parsePayoutField parses addr:amount entries and converts floats to Amount scale.
 func parsePayoutField(val string) map[dao.Address]dao.Amount {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -660,6 +697,7 @@ func parsePayoutField(val string) map[dao.Address]dao.Amount {
 	return payouts
 }
 
+// parseCreatorRestrictionField lets payloads toggle between members-only and public creators.
 func parseCreatorRestrictionField(val string) bool {
 	val = strings.TrimSpace(strings.ToLower(val))
 	if val == "" {
@@ -676,6 +714,7 @@ func parseCreatorRestrictionField(val string) bool {
 	return true
 }
 
+// normalizeMembershipPayloadFormat verifies the placeholders exist (nft + caller) else falls back.
 func normalizeMembershipPayloadFormat(format string) string {
 	format = strings.TrimSpace(format)
 	if format == "" {
@@ -687,6 +726,7 @@ func normalizeMembershipPayloadFormat(format string) string {
 	return format
 }
 
+// formatMembershipPayload simply replaces {nft}/{caller} tokens right before making the contract call.
 func formatMembershipPayload(format string, nftID string, caller string) string {
 	if format == "" {
 		format = FallbackMembershipPayloadFormat
@@ -696,7 +736,7 @@ func formatMembershipPayload(format string, nftID string, caller string) string 
 	return result
 }
 
-// strptr returns a pointer to the provided string.
+// strptr is a tiny helper so we can take a literal string and hand a pointer to sdk calls quickly.
 func strptr(s string) *string { return &s }
 
 ///////////////////////////////////////////////////
@@ -715,8 +755,7 @@ const (
 	ProjectsCount = "count:proj"
 )
 
-// getCount retrieves the counter value stored under a given key.
-// Returns 0 if the key is not set.
+// getCount reads the string counter under the key and defaults to zero, nothing magical here.
 func getCount(key string) uint64 {
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
@@ -726,13 +765,13 @@ func getCount(key string) uint64 {
 	return n
 }
 
-// setCount updates the counter value stored under a given key.
+// setCount stores uint64 counters back as decimal strings for the host kv.
 func setCount(key string, n uint64) {
 	sdk.StateSetObject(key, strconv.FormatUint(n, 10))
 }
 
-// StringToUInt64 converts a string pointer to a uint64.
-// Aborts if the pointer is nil or parsing fails.
+// StringToUInt64 converts optional string inputs (like payloads) into ids while screaming on bad data.
+// Example payload: StringToUInt64(strptr("42"))
 func StringToUInt64(ptr *string) uint64 {
 	if ptr == nil {
 		sdk.Abort("input is empty")
@@ -744,12 +783,15 @@ func StringToUInt64(ptr *string) uint64 {
 	return val
 }
 
-// UInt64ToString converts a uint64 to its decimal string representation.
+// UInt64ToString turns an id back into decimal text for logs or env payload building.
+// Example payload: UInt64ToString(9001)
 func UInt64ToString(val uint64) string {
 	return strconv.FormatUint(val, 10)
 }
 
-// UIntSliceToString converts a slice of uint values to a comma-separated string.
+// UIntSliceToString helps event logging since we encode []uint choices as 1,2,5 etc.
+// Example payload: UIntSliceToString([]uint{0,2,3})
+
 func UIntSliceToString(nums []uint) string {
 	strNums := make([]string, len(nums))
 	for i, n := range nums {
@@ -757,6 +799,7 @@ func UIntSliceToString(nums []uint) string {
 	}
 	return strings.Join(strNums, ",")
 }
+// allowsPauseMeta checks whether the meta payload only toggles pause state.
 func allowsPauseMeta(meta map[string]string) bool {
 	if meta == nil {
 		return false
@@ -769,6 +812,7 @@ func allowsPauseMeta(meta map[string]string) bool {
 	return false
 }
 
+// proposalAllowsExecutionWhilePaused reuses the meta helper so pause votes can execute safely.
 func proposalAllowsExecutionWhilePaused(prpsl *dao.Proposal) bool {
 	if prpsl == nil || prpsl.Outcome == nil || prpsl.Outcome.Meta == nil {
 		return false

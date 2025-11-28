@@ -5,6 +5,7 @@
 
 package main
 
+// main is left empty on purpose because the wasm entrypoints are exported funcs above, ja?
 func main() {
 
 }

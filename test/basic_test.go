@@ -10,6 +10,7 @@ import (
 	ledgerDb "vsc-node/modules/db/vsc/ledger"
 )
 
+// TestCreateProject checks the create project flow so we dont break it again.
 func TestCreateProject(t *testing.T) {
 	ct := SetupContractTest()
 
@@ -36,6 +37,7 @@ func TestCreateProject(t *testing.T) {
 	CallContract(t, ct, "proposal_create", PayloadString(proposalPayload), []contracts.Intent{{Type: "transfer.allow", Args: map[string]string{"limit": "1.000", "token": "hive"}}}, "hive:someone", true, uint(1_000_000_000))
 }
 
+// TestProjectCreateRequiresIntent checks the project create requires intent flow so we dont break it again.
 func TestProjectCreateRequiresIntent(t *testing.T) {
 	ct := SetupContractTest()
 	fields := defaultProjectFields()
@@ -46,6 +48,7 @@ func TestProjectCreateRequiresIntent(t *testing.T) {
 	}
 }
 
+// TestProposalLifecycle checks the proposal lifecycle flow so we dont break it again.
 func TestProposalLifecycle(t *testing.T) {
 	ct := SetupContractTest()
 
@@ -84,6 +87,7 @@ func TestProposalLifecycle(t *testing.T) {
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
+// TestAddFundsToTreasury checks the add funds to treasury flow so we dont break it again.
 func TestAddFundsToTreasury(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -91,6 +95,7 @@ func TestAddFundsToTreasury(t *testing.T) {
 	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.500"), "hive:someone", true, uint(1_000_000_000))
 }
 
+// TestAddStakeFundsFailsInDemocracy checks the add stake funds fails in democracy flow so we dont break it again.
 func TestAddStakeFundsFailsInDemocracy(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createProjectWithVoting(t, ct, "0")
@@ -101,6 +106,7 @@ func TestAddStakeFundsFailsInDemocracy(t *testing.T) {
 	}
 }
 
+// TestAddStakeFundsSucceedsInStakeSystem checks the add stake funds succeeds in stake system flow so we dont break it again.
 func TestAddStakeFundsSucceedsInStakeSystem(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createProjectWithVoting(t, ct, "1")
@@ -108,6 +114,7 @@ func TestAddStakeFundsSucceedsInStakeSystem(t *testing.T) {
 	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.750"), "hive:someone", true, uint(1_000_000_000))
 }
 
+// TestAddFundsRejectsWrongAsset checks the add funds rejects wrong asset flow so we dont break it again.
 func TestAddFundsRejectsWrongAsset(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -119,6 +126,7 @@ func TestAddFundsRejectsWrongAsset(t *testing.T) {
 	}
 }
 
+// TestProjectJoinRejectsWrongAsset checks the project join rejects wrong asset flow so we dont break it again.
 func TestProjectJoinRejectsWrongAsset(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -129,6 +137,7 @@ func TestProjectJoinRejectsWrongAsset(t *testing.T) {
 	}
 }
 
+// TestAddStakeFundsRequiresMembership checks the add stake funds requires membership flow so we dont break it again.
 func TestAddStakeFundsRequiresMembership(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createProjectWithVoting(t, ct, "1")
@@ -139,6 +148,7 @@ func TestAddStakeFundsRequiresMembership(t *testing.T) {
 	}
 }
 
+// TestVoteCanBeUpdatedBeforeTally checks the vote can be updated before tally flow so we dont break it again.
 func TestVoteCanBeUpdatedBeforeTally(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -156,6 +166,7 @@ func TestVoteCanBeUpdatedBeforeTally(t *testing.T) {
 	}
 }
 
+// TestProjectJoinSuccess checks the project join success flow so we dont break it again.
 func TestProjectJoinSuccess(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -163,6 +174,7 @@ func TestProjectJoinSuccess(t *testing.T) {
 	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+// TestProjectJoinRequiresIntent checks the project join requires intent flow so we dont break it again.
 func TestProjectJoinRequiresIntent(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -172,6 +184,7 @@ func TestProjectJoinRequiresIntent(t *testing.T) {
 	}
 }
 
+// TestProjectTransferOwnership checks the project transfer ownership flow so we dont break it again.
 func TestProjectTransferOwnership(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -181,6 +194,7 @@ func TestProjectTransferOwnership(t *testing.T) {
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", projectID)), nil, "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+// TestProjectTransferRequiresOwner checks the project transfer requires owner flow so we dont break it again.
 func TestProjectTransferRequiresOwner(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -192,6 +206,7 @@ func TestProjectTransferRequiresOwner(t *testing.T) {
 	}
 }
 
+// TestProjectPauseRequiresOwner checks the project pause requires owner flow so we dont break it again.
 func TestProjectPauseRequiresOwner(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -201,6 +216,7 @@ func TestProjectPauseRequiresOwner(t *testing.T) {
 	}
 }
 
+// TestProjectPauseBlocksProposals checks the project pause blocks proposals flow so we dont break it again.
 func TestProjectPauseBlocksProposals(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -213,6 +229,7 @@ func TestProjectPauseBlocksProposals(t *testing.T) {
 	CallContract(t, ct, "proposal_create", PayloadString(strings.Join(simpleProposalFields(projectID, "2"), "|")), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
 }
 
+// TestProposalRequiresMembership checks the proposal requires membership flow so we dont break it again.
 func TestProposalRequiresMembership(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -223,6 +240,7 @@ func TestProposalRequiresMembership(t *testing.T) {
 	}
 }
 
+// TestProposalCreationAllowedForPublic checks the proposal creation allowed for public flow so we dont break it again.
 func TestProposalCreationAllowedForPublic(t *testing.T) {
 	ct := SetupContractTest()
 	fields := defaultProjectFields()
@@ -234,6 +252,7 @@ func TestProposalCreationAllowedForPublic(t *testing.T) {
 	CallContract(t, ct, "proposal_create", proposalPayload, transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+// TestProposalCreationRequiresCostIntent checks the proposal creation requires cost intent flow so we dont break it again.
 func TestProposalCreationRequiresCostIntent(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -244,6 +263,7 @@ func TestProposalCreationRequiresCostIntent(t *testing.T) {
 	}
 }
 
+// TestProposalCreationRejectsInsufficientCost checks the proposal creation rejects insufficient cost flow so we dont break it again.
 func TestProposalCreationRejectsInsufficientCost(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -254,6 +274,7 @@ func TestProposalCreationRejectsInsufficientCost(t *testing.T) {
 	}
 }
 
+// TestProposalCreationRejectsWrongAssetForCost checks the proposal creation rejects wrong asset for cost flow so we dont break it again.
 func TestProposalCreationRejectsWrongAssetForCost(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -264,6 +285,7 @@ func TestProposalCreationRejectsWrongAssetForCost(t *testing.T) {
 	}
 }
 
+// TestProposalMetaUpdateAllowsPublic checks the proposal meta update allows public flow so we dont break it again.
 func TestProposalMetaUpdateAllowsPublic(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -282,6 +304,7 @@ func TestProposalMetaUpdateAllowsPublic(t *testing.T) {
 	CallContract(t, ct, "proposal_create", outsiderProposalPayload, transferIntent("1.000"), "hive:outsider", true, uint(1_000_000_000))
 }
 
+// TestVoteRequiresMembership checks the vote requires membership flow so we dont break it again.
 func TestVoteRequiresMembership(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -293,6 +316,7 @@ func TestVoteRequiresMembership(t *testing.T) {
 	}
 }
 
+// TestProposalEarlyTallyFails checks the proposal early tally fails flow so we dont break it again.
 func TestProposalEarlyTallyFails(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -303,6 +327,7 @@ func TestProposalEarlyTallyFails(t *testing.T) {
 	}
 }
 
+// TestProjectLeaveFlow checks the project leave flow so we dont break it again.
 func TestProjectLeaveFlow(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -312,6 +337,7 @@ func TestProjectLeaveFlow(t *testing.T) {
 	CallContractAt(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
+// TestProjectLeaveCooldown checks the project leave cooldown flow so we dont break it again.
 func TestProjectLeaveCooldown(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -324,6 +350,7 @@ func TestProjectLeaveCooldown(t *testing.T) {
 	}
 }
 
+// TestVoteRejectedForLateJoiner checks the vote rejected for late joiner flow so we dont break it again.
 func TestVoteRejectedForLateJoiner(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createProjectWithVoting(t, ct, "1")
@@ -339,6 +366,7 @@ func TestVoteRejectedForLateJoiner(t *testing.T) {
 	}
 }
 
+// TestProjectLeaveBlockedDuringPayoutProposal checks the project leave blocked during payout proposal flow so we dont break it again.
 func TestProjectLeaveBlockedDuringPayoutProposal(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -355,6 +383,7 @@ func TestProjectLeaveBlockedDuringPayoutProposal(t *testing.T) {
 	CallContract(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+// TestProposalMetaUpdateLeaveCooldown checks the proposal meta update leave cooldown flow so we dont break it again.
 func TestProposalMetaUpdateLeaveCooldown(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -369,6 +398,7 @@ func TestProposalMetaUpdateLeaveCooldown(t *testing.T) {
 	CallContract(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+// TestProposalMetaUpdateThreshold checks the proposal meta update threshold flow so we dont break it again.
 func TestProposalMetaUpdateThreshold(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -388,6 +418,7 @@ func TestProposalMetaUpdateThreshold(t *testing.T) {
 	}
 }
 
+// TestProposalMetaTogglePause checks the proposal meta toggle pause flow so we dont break it again.
 func TestProposalMetaTogglePause(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -403,6 +434,7 @@ func TestProposalMetaTogglePause(t *testing.T) {
 	}
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|false", projectID)), nil, "hive:someone", true, uint(1_000_000_000))
 }
+// TestProposalExecuteTransfersFunds2Members checks the payout split across two members so we dont break it again.
 func TestProposalExecuteTransfersFunds2Members(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -416,6 +448,7 @@ func TestProposalExecuteTransfersFunds2Members(t *testing.T) {
 	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
+// TestProposalExecuteTransfersFunds3Members checks the payout split across three members so we dont break it again.
 func TestProposalExecuteTransfersFunds3Members(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -430,6 +463,7 @@ func TestProposalExecuteTransfersFunds3Members(t *testing.T) {
 	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
+// TestProposalExecuteRequiresPassed checks the proposal execute requires passed flow so we dont break it again.
 func TestProposalExecuteRequiresPassed(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -441,6 +475,7 @@ func TestProposalExecuteRequiresPassed(t *testing.T) {
 	}
 }
 
+// TestProposalExecuteInsufficientFunds checks the proposal execute insufficient funds flow so we dont break it again.
 func TestProposalExecuteInsufficientFunds(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -456,6 +491,7 @@ func TestProposalExecuteInsufficientFunds(t *testing.T) {
 	}
 }
 
+// TestProposalExecuteBlockedWhenPaused checks the proposal execute blocked when paused flow so we dont break it again.
 func TestProposalExecuteBlockedWhenPaused(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -472,6 +508,7 @@ func TestProposalExecuteBlockedWhenPaused(t *testing.T) {
 	}
 }
 
+// TestProposalCancelFlow checks the proposal cancel flow so we dont break it again.
 func TestProposalCancelFlow(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -484,6 +521,7 @@ func TestProposalCancelFlow(t *testing.T) {
 	_, _, _ = CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000))
 }
 
+// TestProposalCancelRequiresCreatorOrOwner checks the proposal cancel requires creator or owner flow so we dont break it again.
 func TestProposalCancelRequiresCreatorOrOwner(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -495,6 +533,7 @@ func TestProposalCancelRequiresCreatorOrOwner(t *testing.T) {
 	}
 }
 
+// TestProposalCancelOwnerRefundsCreator checks the proposal cancel owner refunds creator flow so we dont break it again.
 func TestProposalCancelOwnerRefundsCreator(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -509,6 +548,7 @@ func TestProposalCancelOwnerRefundsCreator(t *testing.T) {
 	}
 }
 
+// TestProposalExecuteRespectsDelay checks the proposal execute respects delay flow so we dont break it again.
 func TestProposalExecuteRespectsDelay(t *testing.T) {
 	ct := SetupContractTest()
 	fields := defaultProjectFields()
@@ -527,6 +567,7 @@ func TestProposalExecuteRespectsDelay(t *testing.T) {
 	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T12:00:00")
 }
 
+// TestProposalMetaUpdateOwner checks the proposal meta update owner flow so we dont break it again.
 func TestProposalMetaUpdateOwner(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
@@ -541,6 +582,7 @@ func TestProposalMetaUpdateOwner(t *testing.T) {
 	}
 }
 
+// parseCreatedID reads the `msg:<id>` responses so the tests can reuse the same helper everywhere.
 func parseCreatedID(t *testing.T, ret string, entity string) uint64 {
 	cleaned := strings.TrimSpace(ret)
 	cleaned = strings.TrimPrefix(cleaned, "msg:")
@@ -555,18 +597,22 @@ func parseCreatedID(t *testing.T, ret string, entity string) uint64 {
 	return id
 }
 
+// transferIntent crafts a simple hive transfer.allow intent used by most tests.
 func transferIntent(limit string) []contracts.Intent {
 	return transferIntentWithToken(limit, "hive")
 }
 
+// transferIntentWithToken allows tests to swap the token for negative scenarios.
 func transferIntentWithToken(limit string, token string) []contracts.Intent {
 	return []contracts.Intent{{Type: "transfer.allow", Args: map[string]string{"limit": limit, "token": token}}}
 }
 
+// joinProjectMember wraps the repeated join call to keep tests terse.
 func joinProjectMember(t *testing.T, ct *test_utils.ContractTest, projectID uint64, user string) {
 	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("1.000"), user, true, uint(1_000_000_000))
 }
 
+// voteForProposal reuses the same payload to submit yes votes from multiple members.
 func voteForProposal(t *testing.T, ct *test_utils.ContractTest, proposalID uint64, voters ...string) {
 	payload := PayloadString(fmt.Sprintf("%d|1", proposalID))
 	for _, voter := range voters {
@@ -574,12 +620,14 @@ func voteForProposal(t *testing.T, ct *test_utils.ContractTest, proposalID uint6
 	}
 }
 
+// createDefaultProject uses the default field template and returns the new project id.
 func createDefaultProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
 	payload := strings.Join(defaultProjectFields(), "|")
 	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
 	return parseCreatedID(t, res.Ret, "project")
 }
 
+// createProjectWithVoting tweaks the default fields with a custom voting mode before deploying.
 func createProjectWithVoting(t *testing.T, ct *test_utils.ContractTest, voting string) uint64 {
 	fields := defaultProjectFields()
 	fields[2] = voting
@@ -588,12 +636,14 @@ func createProjectWithVoting(t *testing.T, ct *test_utils.ContractTest, voting s
 	return parseCreatedID(t, res.Ret, "project")
 }
 
+// createSimpleProposal assembles a minimal non-payout proposal for helper cases.
 func createSimpleProposal(t *testing.T, ct *test_utils.ContractTest, projectID uint64, duration string) uint64 {
 	payload := strings.Join(simpleProposalFields(projectID, duration), "|")
 	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
 	return parseCreatedID(t, res.Ret, "proposal")
 }
 
+// simpleProposalFields returns the base pipe-delimited fields used by helper builders.
 func simpleProposalFields(projectID uint64, duration string) []string {
 	return []string{
 		strconv.FormatUint(projectID, 10),
@@ -608,6 +658,7 @@ func simpleProposalFields(projectID uint64, duration string) []string {
 	}
 }
 
+// createPollProposal spawns a poll-style proposal optionally including payouts/meta updates.
 func createPollProposal(t *testing.T, ct *test_utils.ContractTest, projectID uint64, duration string, payouts string, meta string) uint64 {
 	fields := []string{
 		strconv.FormatUint(projectID, 10),
@@ -625,11 +676,13 @@ func createPollProposal(t *testing.T, ct *test_utils.ContractTest, projectID uin
 	return parseCreatedID(t, res.Ret, "proposal")
 }
 
+// addTreasuryFunds injects some hive into a project so payout tests can execute.
 func addTreasuryFunds(t *testing.T, ct *test_utils.ContractTest, projectID uint64, amount string) {
 	payload := fmt.Sprintf("%d|false", projectID)
 	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent(amount), "hive:someone", true, uint(1_000_000_000))
 }
 
+// defaultProjectFields returns the canonical test fixture for quick DAO deployments.
 func defaultProjectFields() []string {
 	return []string{
 		"dao",

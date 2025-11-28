@@ -9,6 +9,8 @@ import (
 //go:wasmimport sdk console.log
 func log(s *string) *string
 
+// Log writes a message to the wasm console so we can trace contract steps.
+// Example payload: sdk.Log("hello dao")
 func Log(s string) {
 	log(&s)
 }
@@ -63,34 +65,40 @@ func abort(msg, file *string, line, column *int32)
 //go:wasmimport env revert
 func revert(msg, symbol *string)
 
-// Aborts the contract execution
+// Abort stops execution immediately and surfaces the message to the chain, so use sparingly.
+// Example payload: sdk.Abort("no stake")
 func Abort(msg string) {
 	ln := int32(0)
 	abort(&msg, nil, &ln, &ln)
 	panic(msg)
 }
 
-// Reverts the transaction and abort execution in the same way as Abort().
+// Revert throws a named error back to the caller (like revert in solidity) with a short symbol.
+// Example payload: sdk.Revert("bad input", "input_error")
 func Revert(msg string, symbol string) {
 	revert(&msg, &symbol)
 }
 
-// Set a value by key in the contract state
+// StateSetObject stores a key/value string pair into contract kv storage.
+// Example payload: sdk.StateSetObject("count", "5")
 func StateSetObject(key string, value string) {
 	stateSetObject(&key, &value)
 }
 
-// Get a value by key from the contract state
+// StateGetObject fetches a key and returns nil when missing.
+// Example payload: sdk.StateGetObject("count")
 func StateGetObject(key string) *string {
 	return stateGetObject(&key)
 }
 
-// Delete or unset a value by key in the contract state
+// StateDeleteObject removes the key entirely, handy for cleanup.
+// Example payload: sdk.StateDeleteObject("count")
 func StateDeleteObject(key string) {
 	stateDeleteObject(&key)
 }
 
-// Get current execution environment variables
+// GetEnv pulls the JSON env blob from the chain and maps it to Env struct.
+// Example payload: sdk.GetEnv()
 func GetEnv() Env {
 	envStr := *getEnv(nil)
 	env := Env{}
@@ -161,17 +169,20 @@ func GetEnv() Env {
 	return env
 }
 
-// Get current execution environment variables as json string
+// GetEnvStr returns the raw JSON environment string without parsing.
+// Example payload: sdk.GetEnvStr()
 func GetEnvStr() string {
 	return *getEnv(nil)
 }
 
-// Get current execution environment variable by a key
+// GetEnvKey pulls a single env key (like tx.id) to avoid parsing the whole struct.
+// Example payload: sdk.GetEnvKey("tx.id")
 func GetEnvKey(key string) *string {
 	return getEnvKey(&key)
 }
 
-// Get balance of an account
+// GetBalance queries hive balance for the given account+asset combo.
+// Example payload: sdk.GetBalance(sdk.Address("hive:foo"), sdk.AssetHive)
 func GetBalance(address Address, asset Asset) int64 {
 	addr := address.String()
 	as := asset.String()
@@ -183,14 +194,16 @@ func GetBalance(address Address, asset Asset) int64 {
 	return bal
 }
 
-// Transfer assets from caller account to the contract up to the limit specified in `intents`. The transaction must be signed using active authority for Hive accounts.
+// HiveDraw pulls tokens from the caller to the contract within the transfer.allow limit.
+// Example payload: sdk.HiveDraw(1000, sdk.AssetHive)
 func HiveDraw(amount int64, asset Asset) {
 	amt := strconv.FormatInt(amount, 10)
 	as := asset.String()
 	hiveDraw(&amt, &as)
 }
 
-// Transfer assets from the contract to another account.
+// HiveTransfer sends tokens from the contract towards a user address.
+// Example payload: sdk.HiveTransfer(sdk.Address("hive:foo"), 500, sdk.AssetHbd)
 func HiveTransfer(to Address, amount int64, asset Asset) {
 	toaddr := to.String()
 	amt := strconv.FormatInt(amount, 10)
@@ -198,7 +211,8 @@ func HiveTransfer(to Address, amount int64, asset Asset) {
 	hiveTransfer(&toaddr, &amt, &as)
 }
 
-// Unmap assets from the contract to a specified Hive account.
+// HiveWithdraw unwraps contract-held funds into the Hive layer (savings etc.).
+// Example payload: sdk.HiveWithdraw(sdk.Address("hive:foo"), 50, sdk.AssetHive)
 func HiveWithdraw(to Address, amount int64, asset Asset) {
 	toaddr := to.String()
 	amt := strconv.FormatInt(amount, 10)
@@ -206,12 +220,14 @@ func HiveWithdraw(to Address, amount int64, asset Asset) {
 	hiveWithdraw(&toaddr, &amt, &as)
 }
 
-// Get a value by key from the contract state of another contract
+// ContractStateGet reads another contract's state key (view-only).
+// Example payload: sdk.ContractStateGet("contract:demo", "cfg")
 func ContractStateGet(contractId string, key string) *string {
 	return contractRead(&contractId, &key)
 }
 
-// Call another contract
+// ContractCall performs a synchronous call into another contract with optional intents.
+// Example payload: sdk.ContractCall("contract:demo", "ping", "{}", nil)
 func ContractCall(contractId string, method string, payload string, options *ContractCallOptions) *string {
 	optStr := ""
 	if options != nil {

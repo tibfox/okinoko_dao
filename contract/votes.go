@@ -82,8 +82,8 @@ func decodeVoteRecord(data string) *voteRecord {
 	return &voteRecord{Choices: choices, Weight: weight}
 }
 
-// VoteProposal allows a member of a project to cast a vote on an active proposal.
-// Validates membership, proposal state, stake, and choice indices before recording the vote.
+// VoteProposal validates membership + weight, then updates options and stores the vote receipt.
+// Example payload: VoteProposal(strptr("12|0,1"))
 //
 //go:wasmexport proposals_vote
 func VoteProposal(payload *string) *string {

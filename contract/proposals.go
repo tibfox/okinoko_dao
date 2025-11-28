@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// CreateProposal creates a new proposal within a project.
-// Only members may create proposals. If no options are provided,
-// defaults to a binary yes/no vote.
+// CreateProposal builds a proposal payload, enforces membership + costs, and snapshots stake + member counts.
+// Example payload: CreateProposal(strptr("5|Add funds|Desc|..."))
 //
 //go:wasmexport proposal_create
 func CreateProposal(payload *string) *string {
@@ -127,9 +126,8 @@ func CreateProposal(payload *string) *string {
 // Tally
 // -----------------------------------------------------------------------------
 
-// TallyProposal closes voting on a proposal and determines its result.
-// Checks quorum and threshold rules, then marks the proposal as passed,
-// closed, or failed.
+// TallyProposal crunches the weight totals, checks quorum/threshold and sets the final state.
+// Example payload: TallyProposal(strptr("12"))
 //
 //go:wasmexport proposal_tally
 func TallyProposal(proposalId *string) *string {
@@ -203,9 +201,8 @@ func TallyProposal(proposalId *string) *string {
 // Execute
 // -----------------------------------------------------------------------------
 
-// ExecuteProposal executes a previously passed proposal.
-// It can transfer funds or update project metadata as defined
-// in the proposal outcome.
+// ExecuteProposal enforces execution delays, drains treasury if needed, and applies config/meta changes.
+// Example payload: ExecuteProposal(strptr("77"))
 //
 //go:wasmexport proposal_execute
 func ExecuteProposal(proposalID *string) *string {
@@ -423,6 +420,9 @@ func loadProposal(id uint64) *dao.Proposal {
 	return prpsl
 }
 
+// CancelProposal lets either creator or owner abort an active proposal and optionally refund the cost.
+// Example payload: CancelProposal(strptr("42"))
+//
 //go:wasmexport proposal_cancel
 func CancelProposal(payload *string) *string {
 	raw := unwrapPayload(payload, "proposal ID is required")
