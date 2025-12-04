@@ -250,6 +250,7 @@ func decodeCreateProjectArgs(payload *string) *dao.CreateProjectArgs {
 		Name:        strings.TrimSpace(get(0)),
 		Description: strings.TrimSpace(get(1)),
 		Metadata:    normalizeOptionalField(get(13)),
+		URL:         normalizeOptionalField(get(16)),
 	}
 	cfg := dao.ProjectConfig{
 		VotingSystem: parseVotingSystem(get(2)),
@@ -323,6 +324,7 @@ func decodeCreateProposalArgs(payload *string) *dao.CreateProposalArgs {
 		ProposalDuration: duration,
 		Metadata:         metadata,
 		ForcePoll:        forcePoll,
+		URL:              normalizeOptionalField(get(9)),
 	}
 }
 

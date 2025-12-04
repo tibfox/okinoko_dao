@@ -85,6 +85,7 @@ func CreateProject(payload *string) *string {
 		Owner:       callerAddr,
 		Name:        input.Name,
 		Description: input.Description,
+		URL:         input.URL,
 		Metadata:    input.Metadata,
 		Funds:       treasuryAmount,
 		FundsAsset:  dao.Asset(ta.Token),
@@ -140,7 +141,11 @@ func JoinProject(projectID *string) *string {
 		sdk.Abort("already a member")
 	}
 
-	if prj.Config.MembershipNFT != nil {
+	if prj.Config.MembershipNFT != nil &&
+		prj.Config.MembershipNFTContract != nil &&
+		prj.Config.MembershipNFTContractFunction != nil &&
+		*prj.Config.MembershipNFTContract != "" &&
+		*prj.Config.MembershipNFTContractFunction != "" {
 		// check if caller is owner of any edition of the membership nft
 		// GetNFTOwnedEditionsArgs specifies the arguments to query editions owned by an address.
 
@@ -418,6 +423,7 @@ func loadProject(id uint64) *dao.Project {
 		Owner:       meta.Owner,
 		Name:        meta.Name,
 		Description: meta.Description,
+		URL:         meta.URL,
 		Config:      *cfg,
 		Metadata:    meta.Metadata,
 		Funds:       fin.Funds,
@@ -437,6 +443,7 @@ func saveProjectMeta(prj *dao.Project) {
 		Paused:      prj.Paused,
 		Tx:          prj.Tx,
 		Metadata:    prj.Metadata,
+		URL:         prj.URL,
 	}
 	data := dao.EncodeProjectMeta(&meta)
 	stateSetIfChanged(projectKey(prj.ID), string(data))

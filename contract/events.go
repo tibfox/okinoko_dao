@@ -103,12 +103,13 @@ func emitLeaveEvent(projectId uint64, memberAddress string) {
 // emitProjectCreatedEvent gives explorers a neat ping without scanning full storage diffs.
 func emitProjectCreatedEvent(project *dao.Project, createdByAddress string) {
 	payload := fmt.Sprintf(
-		"dc|id:%d|by:%s|name:%s|description:%s|metadata:%s|asset:%s|voting:%s|threshold:%f|quorum:%f|proposalDuration:%d|executionDelay:%d|leaveCooldown:%d|proposalCost:%f|stakeMin:%f|membershipContract:%s|membershipFunction:%s|membershipNft:%s|membershipPayload:%s|membersOnly:%s",
+		"dc|id:%d|by:%s|name:%s|description:%s|metadata:%s|url:%s|asset:%s|voting:%s|threshold:%f|quorum:%f|proposalDuration:%d|executionDelay:%d|leaveCooldown:%d|proposalCost:%f|stakeMin:%f|membershipContract:%s|membershipFunction:%s|membershipNft:%s|membershipPayload:%s|membersOnly:%s",
 		project.ID,
 		createdByAddress,
 		sanitizeEventValue(project.Name),
 		sanitizeEventValue(project.Description),
 		sanitizeEventValue(project.Metadata),
+		sanitizeEventValue(project.URL),
 		dao.AssetToString(project.FundsAsset),
 		project.Config.VotingSystem.String(),
 		project.Config.ThresholdPercent,
@@ -136,13 +137,14 @@ func emitProposalCreatedEvent(prpsl *dao.Proposal, projectID uint64, creator str
 		outcomeMeta = formatMetadataMap(prpsl.Outcome.Meta)
 	}
 	payload := fmt.Sprintf(
-		"pc|id:%d|project:%d|by:%s|name:%s|description:%s|metadata:%s|duration:%d|isPoll:%s|options:%s|payouts:%s|outcomeMeta:%s",
+		"pc|id:%d|project:%d|by:%s|name:%s|description:%s|metadata:%s|url:%s|duration:%d|isPoll:%s|options:%s|payouts:%s|outcomeMeta:%s",
 		prpsl.ID,
 		projectID,
 		creator,
 		sanitizeEventValue(prpsl.Name),
 		sanitizeEventValue(prpsl.Description),
 		sanitizeEventValue(prpsl.Metadata),
+		sanitizeEventValue(prpsl.URL),
 		prpsl.DurationHours,
 		strconv.FormatBool(prpsl.IsPoll),
 		formatOptionsList(options),

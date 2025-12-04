@@ -111,6 +111,7 @@ type Project struct {
 	Name        string
 	Description string
 	Config      ProjectConfig
+	URL         string
 	Funds       Amount
 	FundsAsset  Asset
 	Paused      bool
@@ -128,6 +129,7 @@ type ProjectMeta struct {
 	Paused      bool
 	Tx          string
 	Metadata    string
+	URL         string
 }
 
 // ProjectFinance keeps track of treasury and aggregate staking data.
@@ -163,6 +165,7 @@ type Proposal struct {
 	StakeSnapshot       Amount
 	MemberCountSnapshot uint
 	Metadata            string
+	URL                 string
 	IsPoll              bool
 	ResultOptionID      int32
 	OptionCount         uint32
@@ -174,6 +177,7 @@ type CreateProjectArgs struct {
 	ProjectConfig ProjectConfig
 	Description   string
 	Metadata      string
+	URL           string
 }
 
 type CreateProposalArgs struct {
@@ -185,6 +189,7 @@ type CreateProposalArgs struct {
 	ProposalDuration uint64
 	Metadata         string
 	ForcePoll        bool
+	URL              string
 }
 
 type VoteProposalArgs struct {

@@ -199,6 +199,7 @@ func EncodeProject(prj *Project) []byte {
 	w.writeString(prj.Metadata)
 	w.writeAmount(prj.StakeTotal)
 	w.writeUint64(prj.MemberCount)
+	w.writeString(prj.URL)
 	return w.bytes()
 }
 
@@ -223,6 +224,7 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeBool(prpsl.IsPoll)
 	w.writeVarInt(int64(prpsl.ResultOptionID))
 	w.writeInt64(prpsl.ExecutableAt)
+	w.writeString(prpsl.URL)
 	return w.bytes()
 }
 
@@ -234,6 +236,7 @@ func EncodeCreateProjectArgs(args *CreateProjectArgs) []byte {
 	w.writeString(args.Description)
 	encodeProjectConfig(w, &args.ProjectConfig)
 	w.writeString(args.Metadata)
+	w.writeString(args.URL)
 	return w.bytes()
 }
 
@@ -251,6 +254,7 @@ func EncodeCreateProposalArgs(args *CreateProposalArgs) []byte {
 	encodeProposalOutcome(w, args.ProposalOutcome)
 	w.writeUint64(args.ProposalDuration)
 	w.writeString(args.Metadata)
+	w.writeString(args.URL)
 	return w.bytes()
 }
 
@@ -635,6 +639,11 @@ func DecodeProject(data []byte) (*Project, error) {
 	if prj.MemberCount, err = r.readUint64(); err != nil {
 		return nil, err
 	}
+	if r.pos < len(r.data) {
+		if prj.URL, err = r.readString(); err != nil {
+			return nil, err
+		}
+	}
 	return prj, nil
 }
 
@@ -667,6 +676,7 @@ func EncodeProjectMeta(meta *ProjectMeta) []byte {
 	w.writeBool(meta.Paused)
 	w.writeString(meta.Tx)
 	w.writeString(meta.Metadata)
+	w.writeString(meta.URL)
 	return w.bytes()
 }
 
@@ -695,6 +705,11 @@ func DecodeProjectMeta(data []byte) (*ProjectMeta, error) {
 	}
 	if meta.Metadata, err = r.readString(); err != nil {
 		return nil, err
+	}
+	if r.pos < len(r.data) {
+		if meta.URL, err = r.readString(); err != nil {
+			return nil, err
+		}
 	}
 	return &meta, nil
 }
@@ -800,6 +815,11 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 	if prpsl.ExecutableAt, err = r.readInt64(); err != nil {
 		return nil, err
 	}
+	if r.pos < len(r.data) {
+		if prpsl.URL, err = r.readString(); err != nil {
+			return nil, err
+		}
+	}
 	return prpsl, nil
 }
 
@@ -820,6 +840,11 @@ func DecodeCreateProjectArgs(data []byte) (*CreateProjectArgs, error) {
 	}
 	if args.Metadata, err = r.readString(); err != nil {
 		return nil, err
+	}
+	if r.pos < len(r.data) {
+		if args.URL, err = r.readString(); err != nil {
+			return nil, err
+		}
 	}
 	return args, nil
 }
@@ -857,6 +882,11 @@ func DecodeCreateProposalArgs(data []byte) (*CreateProposalArgs, error) {
 	}
 	if args.Metadata, err = r.readString(); err != nil {
 		return nil, err
+	}
+	if r.pos < len(r.data) {
+		if args.URL, err = r.readString(); err != nil {
+			return nil, err
+		}
 	}
 	return args, nil
 }

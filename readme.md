@@ -76,13 +76,13 @@ All actions are invoked by calling the WASM contract entry points below. Payload
 
 | Action / Export | Payload | Description | Return |
 |-----------------|---------|-------------|--------|
-| `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?` | Creates a new project. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
+| `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?` | Creates a new project. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
 | `project_join` | `projectId` | Joins a project using the caller’s first `transfer.allow` intent. Aborts if paused or the caller fails NFT membership checks. | `"joined"` |
 | `project_leave` | `projectId` | Starts/finishes the leave cooldown. Blocks when payouts targeting the member are still active. | `"exit requested"` / `"exit finished"` |
 | `project_funds` | `projectId\|toStakeFlag` | Adds funds either to the treasury (`false`) or increases the caller’s stake (`true`, stake systems only). | `"funds added"` |
 | `project_transfer` | `projectId\|newOwner` | Owner-only direct transfer of ownership to an existing member. | `"ownership transferred"` |
 | `project_pause` | `projectId\|true|false` | Owner-only immediate pause/unpause. Paused mode blocks new proposals/execution except meta proposals that only toggle pause. | `"paused"` / `"unpaused"` |
-| `proposal_create` | `projectId\|name\|description\|duration\|options?\|forcePoll?\|payouts?\|meta?\|metadata?` | Creates a proposal. `payouts` uses `member:amount;member:amount`. `meta` is a `key=value;key=value` string and can update project config (threshold, quorum, execution delay, pause toggle, owner, membership payload, etc.). Cost is debited automatically. | ID of the proposal |
+| `proposal_create` | `projectId\|name\|description\|duration\|options?\|forcePoll?\|payouts?\|meta?\|metadata?\|proposalUrl?` | Creates a proposal. `payouts` uses `member:amount;member:amount`. `meta` is a `key=value;key=value` string and can update project config (threshold, quorum, execution delay, pause toggle, owner, membership payload, etc.). Cost is debited automatically. | ID of the proposal |
 | `proposals_vote` | `proposalId\|choices` | Casts or updates votes for a proposal. Weight comes from stake. Choices can be comma or semicolon separated indices. | `"voted"` |
 | `proposal_tally` | `proposalId` | Closes voting after duration. Sets proposal to `passed`, `closed`, `failed`, or `cancelled`. | `"tallied"` |
 | `proposal_execute` | `proposalId` | Executes passed proposals after the execution delay. Handles treasury payouts and meta updates. | `"executed"` |
@@ -101,6 +101,7 @@ All actions are invoked by calling the WASM contract entry points below. Payload
 - `update_membershipNFTContractFunction=<methodName>`  
 - `update_membershipNFTPayload=<format>` (must contain `{nft}` and `{caller}`)  
 - `update_proposalCreatorRestriction=<0|1>`  
+- `update_url=<https://example.com>` (empty clears it)  
 - `update_owner=<memberAccount>`  
 - `toggle_pause=1`
 
@@ -131,10 +132,10 @@ The contract logs concise events for indexing:
 
 | Event | Description | Example |
 |-------|-------------|---------|
-| `dc` (`dc\|id:<project>\|by:<creator>`) | Project created | `dc\|id:1\|by:hive:alice` |
+| `dc` (`dc\|id:<project>\|by:<creator>`) | Project created (full snapshot including metadata + url) | `dc\|id:1\|by:hive:alice\|name:Demo\|description:test\|metadata:\|url:https://dao.example` |
 | `mj` / `ml` (`mj\|id:<project>\|by:<member>`) | Member joined / left | `mj\|id:1\|by:hive:bob` |
 | `af` / `rf` (`af\|id:<project>\|by:<member>\|am:<float>\|as:<asset>\|s:<bool>`) | Funds added/removed (stake or treasury) | `af\|id:1\|by:hive:bob\|am:1.000000\|as:hive\|s:true` |
-| `pc` (`pc\|id:<proposal>\|by:<creator>`) | Proposal created | `pc\|id:5\|by:hive:alice` |
+| `pc` (`pc\|id:<proposal>\|by:<creator>`) | Proposal created (includes metadata + url snapshot) | `pc\|id:5\|by:hive:alice\|name:Idea\|description:something\|metadata:\|url:https://example` |
 | `ps` (`ps\|id:<proposal>\|s:<state>`) | Proposal state changed (`active`, `passed`, `executed`, `failed`, `cancelled`) | `ps\|id:5\|s:passed` |
 | `px` (`px\|pId:<project>\|prId:<proposal>\|ready:<unix>`) | Proposal becomes executable at timestamp | `px\|pId:1\|prId:5\|ready:1757020800` |
 | `pr` (`pr\|pId:<project>\|prId:<proposal>\|r:<result>`) | Result note (“meta changed”, “funds transferred”) | `pr\|pId:1\|prId:5\|r:funds transferred` |

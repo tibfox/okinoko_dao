@@ -75,6 +75,7 @@ func CreateProposal(payload *string) *string {
 		Name:                input.Name,
 		Description:         input.Description,
 		Metadata:            input.Metadata,
+		URL:                 input.URL,
 		Outcome:             input.ProposalOutcome,
 		CreatedAt:           now,
 		DurationHours:       duration,
@@ -367,6 +368,12 @@ func ExecuteProposal(proposalID *string) *string {
 					oldOwner := prj.Owner
 					prj.Owner = newOwnerAddr
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "owner", dao.AddressToString(oldOwner), dao.AddressToString(newOwnerAddr))
+					metaChanged = true
+					stateChanged = true
+				case "update_url":
+					prev := prj.URL
+					prj.URL = normalizeOptionalField(value)
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "url", prev, prj.URL)
 					metaChanged = true
 					stateChanged = true
 				}
