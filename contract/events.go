@@ -102,7 +102,7 @@ func emitLeaveEvent(projectId uint64, memberAddress string) {
 // emitProjectCreatedEvent gives explorers a neat ping without scanning full storage diffs.
 func emitProjectCreatedEvent(project *Project, createdByAddress string) {
 	payload := fmt.Sprintf(
-		"dc|id:%d|by:%s|name:%s|description:%s|metadata:%s|url:%s|asset:%s|voting:%s|threshold:%f|quorum:%f|proposalDuration:%d|executionDelay:%d|leaveCooldown:%d|proposalCost:%f|stakeMin:%f|membershipContract:%s|membershipFunction:%s|membershipNft:%s|membershipPayload:%s|membersOnly:%s",
+		"dc|id:%d|by:%s|name:%s|description:%s|metadata:%s|url:%s|asset:%s|voting:%s|threshold:%f|quorum:%f|proposalDuration:%d|executionDelay:%d|leaveCooldown:%d|proposalCost:%f|stakeMin:%f|membershipContract:%s|membershipFunction:%s|membershipNft:%s|membershipPayload:%s|membersOnly:%s|whitelistOnly:%s",
 		project.ID,
 		createdByAddress,
 		sanitizeEventValue(project.Name),
@@ -123,6 +123,7 @@ func emitProjectCreatedEvent(project *Project, createdByAddress string) {
 		formatOptionalUint(project.Config.MembershipNFT),
 		sanitizeEventValue(project.Config.MembershipNftPayloadFormat),
 		strconv.FormatBool(project.Config.ProposalsMembersOnly),
+		strconv.FormatBool(project.Config.WhitelistOnly),
 	)
 	sdk.Log(payload)
 }
@@ -226,5 +227,22 @@ func emitFundsRemoved(projectId uint64, removedToAddress string, amount float64,
 		amount,
 		asset,
 		strconv.FormatBool(fromStake),
+	))
+}
+
+// emitWhitelistEvent records whitelist additions/removals for downstream indexers.
+func emitWhitelistEvent(projectId uint64, action string, addresses []sdk.Address) {
+	if len(addresses) == 0 {
+		return
+	}
+	addrs := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		addrs = append(addrs, AddressToString(addr))
+	}
+	sdk.Log(fmt.Sprintf(
+		"wl|id:%d|act:%s|addrs:%s",
+		projectId,
+		sanitizeEventValue(action),
+		strings.Join(addrs, ";"),
 	))
 }

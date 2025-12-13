@@ -56,6 +56,7 @@ func decodeCreateProjectArgs(payload *string) *CreateProjectArgs {
 	if v := strings.TrimSpace(get(15)); v != "" {
 		cfg.MembershipNftPayloadFormat = v
 	}
+	cfg.WhitelistOnly = parseBoolField(get(17))
 	normalizeProjectConfig(&cfg)
 	args.ProjectConfig = cfg
 	return args
@@ -318,6 +319,34 @@ func parsePayoutField(val string) map[sdk.Address]Amount {
 	return payouts
 }
 
+// parseAddressList accepts comma/semicolon separated addresses and normalizes them.
+func parseAddressList(val string) []sdk.Address {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(val, func(r rune) bool {
+		return r == ';' || r == ',' || r == '\n' || r == '\t'
+	})
+	seen := map[string]struct{}{}
+	addresses := make([]sdk.Address, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		addresses = append(addresses, AddressFromString(part))
+	}
+	if len(addresses) == 0 {
+		return nil
+	}
+	return addresses
+}
+
 // parseCreatorRestrictionField lets payloads toggle between members-only and public creators.
 func parseCreatorRestrictionField(val string) bool {
 	val = strings.TrimSpace(strings.ToLower(val))
@@ -370,4 +399,19 @@ func parseVotingSystem(val string) VotingSystem {
 	default:
 		return VotingSystemStake
 	}
+}
+
+// decodeWhitelistPayload reads projectId|addr1;addr2 and returns both parts.
+func decodeWhitelistPayload(payload *string) (uint64, []sdk.Address) {
+	raw := unwrapPayload(payload, "whitelist payload required")
+	parts := strings.Split(raw, "|")
+	if len(parts) < 2 {
+		sdk.Abort("whitelist payload requires projectId|addresses")
+	}
+	projectID := parseUintField(parts[0], "project id")
+	addresses := parseAddressList(parts[1])
+	if len(addresses) == 0 {
+		sdk.Abort("whitelist payload requires addresses")
+	}
+	return projectID, addresses
 }

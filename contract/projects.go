@@ -129,9 +129,15 @@ func JoinProject(projectID *string) *string {
 		sdk.Abort("already a member")
 	}
 
-	// Check NFT membership requirement
+	whitelisted := isWhitelisted(prj.ID, callerAddr)
 	if !checkNFTMembership(prj, callerAddr) {
 		sdk.Abort("membership nft not owned")
+	}
+	if prj.Config.WhitelistOnly {
+		if !whitelisted {
+			sdk.Abort("whitelist approval required")
+		}
+		deleteWhitelistEntry(prj.ID, callerAddr)
 	}
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow()
@@ -176,6 +182,42 @@ func JoinProject(projectID *string) *string {
 	emitJoinedEvent(prj.ID, AddressToString(callerAddr))
 	emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
 	return strptr("joined")
+}
+
+// WhitelistMembers allows the project owner to manually approve new members.
+// Payload: projectId|addr1;addr2
+//
+//go:wasmexport project_whitelist_add
+func WhitelistMembers(payload *string) *string {
+	projectID, addresses := decodeWhitelistPayload(payload)
+	prj := loadProject(projectID)
+	caller := getSenderAddress()
+	if caller != prj.Owner {
+		sdk.Abort("only owner can update whitelist")
+	}
+	added := addWhitelistEntries(prj.ID, addresses)
+	if len(added) > 0 {
+		emitWhitelistEvent(prj.ID, "add", added)
+	}
+	return strptr("whitelist updated")
+}
+
+// RemoveWhitelistedMembers lets owners clean up pending approvals for non-members.
+// Payload: projectId|addr1;addr2
+//
+//go:wasmexport project_whitelist_remove
+func RemoveWhitelistedMembers(payload *string) *string {
+	projectID, addresses := decodeWhitelistPayload(payload)
+	prj := loadProject(projectID)
+	caller := getSenderAddress()
+	if caller != prj.Owner {
+		sdk.Abort("only owner can update whitelist")
+	}
+	removed := removeWhitelistEntries(prj.ID, addresses)
+	if len(removed) > 0 {
+		emitWhitelistEvent(prj.ID, "remove", removed)
+	}
+	return strptr("whitelist updated")
 }
 
 // LeaveProject either schedules or finalizes an exit, blocking folks with active payout locks.

@@ -134,6 +134,7 @@ func encodeProjectConfig(w *binWriter, cfg *ProjectConfig) {
 	w.writeOptionalUint64(cfg.MembershipNFT)
 	w.writeString(cfg.MembershipNftPayloadFormat)
 	w.writeBool(cfg.ProposalsMembersOnly)
+	w.writeBool(cfg.WhitelistOnly)
 }
 
 // encodeMember serializes member lifecycle data for caching and rehydrating later.
@@ -484,6 +485,11 @@ func decodeProjectConfig(r *binReader) (ProjectConfig, error) {
 	}
 	if cfg.ProposalsMembersOnly, err = r.readBool(); err != nil {
 		return cfg, err
+	}
+	if r.pos < len(r.data) {
+		if cfg.WhitelistOnly, err = r.readBool(); err != nil {
+			return cfg, err
+		}
 	}
 	return cfg, nil
 }

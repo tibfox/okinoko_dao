@@ -5,6 +5,7 @@ import (
 	"math"
 	"okinoko_dao/sdk"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -378,6 +379,42 @@ func ExecuteProposal(proposalID *string) *string {
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "url", prev, prj.URL)
 					metaChanged = true
 					stateChanged = true
+				case "update_whitelistOnly":
+					val := strings.ToLower(strings.TrimSpace(value))
+					var newVal bool
+					switch val {
+					case "1", "true", "yes":
+						newVal = true
+					case "0", "false", "no":
+						newVal = false
+					default:
+						sdk.Abort("invalid whitelist flag")
+					}
+					prev := prj.Config.WhitelistOnly
+					prj.Config.WhitelistOnly = newVal
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "whitelistOnly", strconv.FormatBool(prev), strconv.FormatBool(newVal))
+					metaChanged = true
+					configChanged = true
+				case "whitelist_add":
+					addresses := parseAddressList(value)
+					if len(addresses) == 0 {
+						sdk.Abort("whitelist_add metadata requires addresses")
+					}
+					added := addWhitelistEntries(prj.ID, addresses)
+					if len(added) > 0 {
+						emitWhitelistEvent(prj.ID, "add", added)
+						metaChanged = true
+					}
+				case "whitelist_remove":
+					addresses := parseAddressList(value)
+					if len(addresses) == 0 {
+						sdk.Abort("whitelist_remove metadata requires addresses")
+					}
+					removed := removeWhitelistEntries(prj.ID, addresses)
+					if len(removed) > 0 {
+						emitWhitelistEvent(prj.ID, "remove", removed)
+						metaChanged = true
+					}
 				}
 			}
 		}

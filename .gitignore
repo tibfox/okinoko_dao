@@ -8,3 +8,6 @@ data/
 artifacts/
 .cache/
 .config/
+.gocache/
+.vscode/
+.claude/

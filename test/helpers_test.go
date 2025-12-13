@@ -79,7 +79,7 @@ func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action
 		ContractId: ContractID,
 		Action:     action,
 		Payload:    payload,
-		RcLimit:    1000,
+		RcLimit:    100000,
 		Intents:    intents,
 	})
 

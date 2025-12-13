@@ -97,6 +97,7 @@ type ProjectConfig struct {
 	MembershipNFT                 *uint64
 	MembershipNftPayloadFormat    string
 	ProposalsMembersOnly          bool
+	WhitelistOnly                 bool
 }
 
 type Member struct {

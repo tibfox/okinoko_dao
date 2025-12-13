@@ -13,6 +13,8 @@ const (
 	kProjectMember byte = 0x04
 	// kProjectPayoutLock counts pending payouts per member to guard exits.
 	kProjectPayoutLock byte = 0x05
+	// kProjectWhitelist flags pending manual membership approvals.
+	kProjectWhitelist byte = 0x06
 	// kProposalMeta contains encoded Proposal records.
 	kProposalMeta byte = 0x10
 	// kProposalOption stores ProposalOption entries indexed by proposal+option index.
@@ -94,6 +96,16 @@ func payoutLockKey(projectID uint64, addr sdk.Address) string {
 	addrStr := AddressToString(addr)
 	buf := make([]byte, 0, 1+8+len(addrStr))
 	buf = append(buf, kProjectPayoutLock)
+	buf = packU64LE(projectID, buf)
+	buf = append(buf, addrStr...)
+	return string(buf)
+}
+
+// whitelistKey mirrors member keys but keeps approvals in a separate prefix.
+func whitelistKey(projectID uint64, addr sdk.Address) string {
+	addrStr := AddressToString(addr)
+	buf := make([]byte, 0, 1+8+len(addrStr))
+	buf = append(buf, kProjectWhitelist)
 	buf = packU64LE(projectID, buf)
 	buf = append(buf, addrStr...)
 	return string(buf)
