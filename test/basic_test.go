@@ -619,6 +619,186 @@ func TestFullCycle(t *testing.T) {
 	CallContractAt(t, ct, "proposal_execute", PayloadString("0"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T01:00:00")
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Pending scenarios (rename to Test* once ready to execute)
+////////////////////////////////////////////////////////////////////////////////
+
+// PendingDemocraticJoinExactStake documents the expectation that democratic joins require exact stake.
+func PendingDemocraticJoinExactStake(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createProjectWithVoting(t, ct, "0")
+	payload := PayloadString(strconv.FormatUint(projectID, 10))
+	res, _, _ := CallContract(t, ct, "project_join", payload, transferIntent("0.750"), "hive:someoneelse", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "democratic projects require exactly") {
+		t.Fatalf("expected exact stake requirement, got %q", res.Ret)
+	}
+	CallContract(t, ct, "project_join", payload, transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
+}
+
+// PendingStakeJoinMinimumEnforced ensures stake systems reject underfunded joins.
+func PendingStakeJoinMinimumEnforced(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createProjectWithVoting(t, ct, "1")
+	payload := PayloadString(strconv.FormatUint(projectID, 10))
+	res, _, _ := CallContract(t, ct, "project_join", payload, transferIntent("0.500"), "hive:member2", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "stake too low") {
+		t.Fatalf("expected stake minimum enforcement, got %q", res.Ret)
+	}
+	CallContract(t, ct, "project_join", payload, transferIntent("1.000"), "hive:member2", true, uint(1_000_000_000))
+}
+
+// PendingProposalDurationValidation covers the "duration shorter than config" branch.
+func PendingProposalDurationValidation(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	fields := simpleProposalFields(projectID, "0")
+	payload := PayloadString(strings.Join(fields, "|"))
+	res, _, _ := CallContract(t, ct, "proposal_create", payload, transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "Duration must be higher or equal") {
+		t.Fatalf("expected minimum duration check, got %q", res.Ret)
+	}
+}
+
+// PendingTogglePauseProposalWhilePaused verifies toggle pause proposals work while the project is paused.
+func PendingTogglePauseProposalWhilePaused(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", projectID)), nil, "hive:someone", true, uint(1_000_000_000))
+	fields := []string{
+		strconv.FormatUint(projectID, 10),
+		"resume",
+		"toggle pause",
+		"1",
+		"",
+		"0",
+		"",
+		"toggle_pause=0",
+		"",
+	}
+	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(strings.Join(fields, "|")), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	proposalID := parseCreatedID(t, res.Ret, "proposal")
+	voteForProposal(t, ct, proposalID, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+}
+
+// PendingProjectFundsBlockedWhilePaused ensures pause blocks treasury operations.
+func PendingProjectFundsBlockedWhilePaused(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", projectID)), nil, "hive:someone", true, uint(1_000_000_000))
+	payload := fmt.Sprintf("%d|false", projectID)
+	res, _, _ := CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.250"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "project paused") {
+		t.Fatalf("expected pause to block project_funds, got %q", res.Ret)
+	}
+}
+
+// PendingTransferRequiresMemberTarget asserts transfer fails when new owner is not a member.
+func PendingTransferRequiresMemberTarget(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	payload := PayloadString(fmt.Sprintf("%d|%s", projectID, "hive:outsider"))
+	res, _, _ := CallContract(t, ct, "project_transfer", payload, nil, "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "new owner must be a member") {
+		t.Fatalf("expected member-only transfer target, got %q", res.Ret)
+	}
+}
+
+// PendingQuorumThresholdFailure demonstrates tally failure when quorum/threshold aren't met.
+func PendingQuorumThresholdFailure(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	proposalID := createPollProposal(t, ct, projectID, "1", "", "")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	res, _, _ := CallContract(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "proposal is failed") {
+		t.Fatalf("expected execution rejection due to failed proposal, got %q", res.Ret)
+	}
+}
+
+// PendingExecutionDelayMetaUpdate confirms update_executionDelay meta takes effect.
+func PendingExecutionDelayMetaUpdate(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	delayProposal := createPollProposal(t, ct, projectID, "1", "", "update_executionDelay=12")
+	voteForProposal(t, ct, delayProposal, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(delayProposal), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T00:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", delayProposal)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T00:00:00")
+	target := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.100", "")
+	voteForProposal(t, ct, target, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(target), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T01:00:00")
+	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", target)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-03T05:00:00")
+	if !strings.Contains(res.Ret, "execution delay") {
+		t.Fatalf("expected extended execution delay, got %q", res.Ret)
+	}
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", target)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T20:00:00")
+}
+
+// PendingOwnerCancelWithoutTreasuryRefund shows owner cancellations skip refunds when treasury is empty.
+func PendingOwnerCancelWithoutTreasuryRefund(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	// Drain treasury via payout.
+	addTreasuryFunds(t, ct, projectID, "1.000")
+	spend := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:1.000", "")
+	voteForProposal(t, ct, spend, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(spend), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T00:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", spend)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T00:00:00")
+	// Create another proposal, then drain its cost deposit before cancelling.
+	target := createPollProposal(t, ct, projectID, "1", "", "")
+	drain := createPollProposal(t, ct, projectID, "1", "hive:someone:1.000", "")
+	voteForProposal(t, ct, drain, "hive:someone", "hive:someoneelse")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(drain), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", drain)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
+	pre := ct.GetBalance("hive:someone", ledgerDb.AssetHive)
+	CallContract(t, ct, "proposal_cancel", PayloadString(fmt.Sprintf("%d", target)), nil, "hive:someone", true, uint(1_000_000_000))
+	post := ct.GetBalance("hive:someone", ledgerDb.AssetHive)
+	if post != pre {
+		t.Fatalf("expected no refund when treasury empty")
+	}
+}
+
+// PendingPayoutLockReleasedAfterCancel ensures payout locks unblock leaves when the proposal is cancelled.
+func PendingPayoutLockReleasedAfterCancel(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+	addTreasuryFunds(t, ct, projectID, "0.500")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500", "")
+	res, _, _ := CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "active proposal requesting funds") {
+		t.Fatalf("expected payout lock to block leave, got %q", res.Ret)
+	}
+	CallContract(t, ct, "proposal_cancel", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000))
+}
+
+// PendingVoteInvalidOptionIndex covers invalid vote payloads for multi-option proposals.
+func PendingVoteInvalidOptionIndex(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	fields := simpleProposalFields(projectID, "1")
+	fields[4] = "yes;no;maybe"
+	proposalPayload := PayloadString(strings.Join(fields, "|"))
+	res, _, _ := CallContract(t, ct, "proposal_create", proposalPayload, transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	proposalID := parseCreatedID(t, res.Ret, "proposal")
+	badVote := PayloadString(fmt.Sprintf("%d|5", proposalID))
+	res2, _, _ := CallContract(t, ct, "proposals_vote", badVote, nil, "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res2.Ret, "invalid option index") {
+		t.Fatalf("expected invalid option rejection, got %q", res2.Ret)
+	}
+}
+
+// PendingMembershipNFTFlow outlines the expected NFT validation scenarios (requires future harness support).
+func PendingMembershipNFTFlow(t *testing.T) {
+	t.Skip("NFT contract interactions are not yet available in this harness; rename once environment supports it.")
+}
+
 // parseCreatedID reads the `msg:<id>` responses so the tests can reuse the same helper everywhere.
 func parseCreatedID(t *testing.T, ret string, entity string) uint64 {
 	cleaned := strings.TrimSpace(ret)

@@ -1,8 +1,0 @@
-./hash.go
-./hash_utils.go
-./int.go
-./logger.go
-./random.go
-./safe_prime.go
-./signature.pb.go
-./slice.go

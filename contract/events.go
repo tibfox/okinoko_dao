@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 	"sort"
 	"strconv"
@@ -46,18 +45,18 @@ func formatMetadataMap(meta map[string]string) string {
 	return strings.Join(parts, ";")
 }
 
-func formatPayoutMap(payout map[dao.Address]dao.Amount) string {
+func formatPayoutMap(payout map[sdk.Address]Amount) string {
 	if len(payout) == 0 {
 		return ""
 	}
 	type payoutEntry struct {
 		addr   string
-		amount dao.Amount
+		amount Amount
 	}
 	entries := make([]payoutEntry, 0, len(payout))
 	for addr, amt := range payout {
 		entries = append(entries, payoutEntry{
-			addr:   dao.AddressToString(addr),
+			addr:   AddressToString(addr),
 			amount: amt,
 		})
 	}
@@ -66,7 +65,7 @@ func formatPayoutMap(payout map[dao.Address]dao.Amount) string {
 	})
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, fmt.Sprintf("%s:%f", entry.addr, dao.AmountToFloat(entry.amount)))
+		out = append(out, fmt.Sprintf("%s:%f", entry.addr, AmountToFloat(entry.amount)))
 	}
 	return strings.Join(out, ";")
 }
@@ -91,7 +90,7 @@ func emitJoinedEvent(projectId uint64, memberAddress string) {
 	))
 }
 
-// emitLeaveEvent mirrors the join ping but signals a seat freed up inside the dao.
+// emitLeaveEvent mirrors the join ping but signals a seat freed up inside the
 func emitLeaveEvent(projectId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
 		"ml|id:%d|by:%s",
@@ -101,7 +100,7 @@ func emitLeaveEvent(projectId uint64, memberAddress string) {
 }
 
 // emitProjectCreatedEvent gives explorers a neat ping without scanning full storage diffs.
-func emitProjectCreatedEvent(project *dao.Project, createdByAddress string) {
+func emitProjectCreatedEvent(project *Project, createdByAddress string) {
 	payload := fmt.Sprintf(
 		"dc|id:%d|by:%s|name:%s|description:%s|metadata:%s|url:%s|asset:%s|voting:%s|threshold:%f|quorum:%f|proposalDuration:%d|executionDelay:%d|leaveCooldown:%d|proposalCost:%f|stakeMin:%f|membershipContract:%s|membershipFunction:%s|membershipNft:%s|membershipPayload:%s|membersOnly:%s",
 		project.ID,
@@ -110,7 +109,7 @@ func emitProjectCreatedEvent(project *dao.Project, createdByAddress string) {
 		sanitizeEventValue(project.Description),
 		sanitizeEventValue(project.Metadata),
 		sanitizeEventValue(project.URL),
-		dao.AssetToString(project.FundsAsset),
+		AssetToString(project.FundsAsset),
 		project.Config.VotingSystem.String(),
 		project.Config.ThresholdPercent,
 		project.Config.QuorumPercent,
@@ -129,7 +128,7 @@ func emitProjectCreatedEvent(project *dao.Project, createdByAddress string) {
 }
 
 // emitProposalCreatedEvent keeps observers updated with a short pc line for every new idea.
-func emitProposalCreatedEvent(prpsl *dao.Proposal, projectID uint64, creator string, options []string) {
+func emitProposalCreatedEvent(prpsl *Proposal, projectID uint64, creator string, options []string) {
 	var payoutStr string
 	var outcomeMeta string
 	if prpsl.Outcome != nil {
@@ -155,7 +154,7 @@ func emitProposalCreatedEvent(prpsl *dao.Proposal, projectID uint64, creator str
 }
 
 // emitProposalStateChangedEvent is the swiss army knife log entry for any state flip.
-func emitProposalStateChangedEvent(proposalId uint64, proposalState dao.ProposalState) {
+func emitProposalStateChangedEvent(proposalId uint64, proposalState ProposalState) {
 	sdk.Log(fmt.Sprintf(
 		"ps|id:%d|s:%s",
 		proposalId,

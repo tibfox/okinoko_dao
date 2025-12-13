@@ -1,6 +1,0 @@
-./election_data.go
-./election_header.go
-./election_result.go
-./elections.go
-./interface.go
-./schema.go

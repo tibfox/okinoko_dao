@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
-	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 )
 
@@ -90,12 +89,12 @@ func VoteProposal(payload *string) *string {
 	input := decodeVoteProposalArgs(payload)
 	prpsl := loadProposal(input.ProposalID)
 
-	if prpsl.State != dao.ProposalActive {
+	if prpsl.State != ProposalActive {
 		sdk.Abort("proposal not active")
 	}
 	prj := loadProject(prpsl.ProjectID)
 	voter := getSenderAddress()
-	voterAddr := dao.AddressFromString(voter.String())
+	voterAddr := voter
 	member := getMember(prj.ID, voterAddr)
 
 	prevVote := loadVoteRecord(input.ProposalID, voter)
@@ -105,14 +104,17 @@ func VoteProposal(payload *string) *string {
 	}
 
 	// check if stakemin is still the same (it can get modified by proposals)
-	if dao.FloatToAmount(prj.Config.StakeMinAmt) > member.Stake {
+	if FloatToAmount(prj.Config.StakeMinAmt) > member.Stake {
 		sdk.Abort("minimum stake has changed since membership - increase stake")
 	}
 
 	weight := member.Stake
 
+	// Load all options once to avoid repeated storage reads
+	optionCache := make(map[uint32]*ProposalOption)
+
 	if prevVote != nil {
-		prevWeight := dao.FloatToAmount(prevVote.Weight)
+		prevWeight := FloatToAmount(prevVote.Weight)
 		seenPrev := map[uint]bool{}
 		for _, idx := range prevVote.Choices {
 			if seenPrev[idx] {
@@ -122,7 +124,11 @@ func VoteProposal(payload *string) *string {
 			if idx >= uint(prpsl.OptionCount) {
 				continue
 			}
-			option := loadProposalOption(prpsl.ID, uint32(idx))
+			idx32 := uint32(idx)
+			if optionCache[idx32] == nil {
+				optionCache[idx32] = loadProposalOption(prpsl.ID, idx32)
+			}
+			option := optionCache[idx32]
 			if option.WeightTotal > prevWeight {
 				option.WeightTotal -= prevWeight
 			} else {
@@ -131,7 +137,6 @@ func VoteProposal(payload *string) *string {
 			if option.VoterCount > 0 {
 				option.VoterCount--
 			}
-			saveProposalOption(prpsl.ID, uint32(idx), option)
 		}
 	}
 
@@ -146,13 +151,21 @@ func VoteProposal(payload *string) *string {
 			continue
 		}
 		seen[idx] = true
-		option := loadProposalOption(prpsl.ID, uint32(idx))
+		idx32 := uint32(idx)
+		if optionCache[idx32] == nil {
+			optionCache[idx32] = loadProposalOption(prpsl.ID, idx32)
+		}
+		option := optionCache[idx32]
 		option.WeightTotal += weight
 		option.VoterCount++
-		saveProposalOption(prpsl.ID, uint32(idx), option)
 	}
 
-	saveVote(input.ProposalID, voter, input.Choices, dao.AmountToFloat(weight))
-	emitVoteCasted(input.ProposalID, dao.AddressToString(voterAddr), input.Choices, dao.AmountToFloat(weight))
+	// Save all modified options
+	for idx32, option := range optionCache {
+		saveProposalOption(prpsl.ID, idx32, option)
+	}
+
+	saveVote(input.ProposalID, voter, input.Choices, AmountToFloat(weight))
+	emitVoteCasted(input.ProposalID, AddressToString(voterAddr), input.Choices, AmountToFloat(weight))
 	return strptr("voted")
 }

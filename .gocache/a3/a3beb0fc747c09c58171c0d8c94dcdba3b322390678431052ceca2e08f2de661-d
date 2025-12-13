@@ -1,5 +1,0 @@
-./crafter.go
-./p2p.go
-./transaction-pool.go
-./types.go
-./utils.go

@@ -1,7 +1,0 @@
-./basics.go
-./farmhashcc.go
-./farmhashmk.go
-./farmhashna.go
-./farmhashuo.go
-./fp_stub.go
-./fp_amd64.s

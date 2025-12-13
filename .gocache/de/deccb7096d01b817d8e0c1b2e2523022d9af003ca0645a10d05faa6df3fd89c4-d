@@ -1,8 +1,0 @@
-./batch.go
-./coding.go
-./daghelpers.go
-./format.go
-./merkledag.go
-./navipld.go
-./promise.go
-./walker.go

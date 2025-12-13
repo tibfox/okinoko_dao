@@ -1,6 +1,0 @@
-./id.go
-./metrics.go
-./nat_emitter.go
-./obsaddr.go
-./opts.go
-./user_agent.go

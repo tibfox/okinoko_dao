@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 	"strconv"
 	"time"
@@ -17,8 +16,8 @@ func CreateProposal(payload *string) *string {
 	input := decodeCreateProposalArgs(payload)
 
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
-	callerStr := dao.AddressToString(callerAddr)
+	callerStr := caller.String()
+	callerAddr := caller
 	prj := loadProject(input.ProjectID)
 	if prj.Paused {
 		if input.ProposalOutcome == nil || input.ProposalOutcome.Meta == nil {
@@ -68,7 +67,7 @@ func CreateProposal(payload *string) *string {
 		txID = *txPtr
 	}
 
-	prpsl := &dao.Proposal{
+	prpsl := &Proposal{
 		ID:                  id,
 		ProjectID:           input.ProjectID,
 		Creator:             callerAddr,
@@ -79,7 +78,7 @@ func CreateProposal(payload *string) *string {
 		Outcome:             input.ProposalOutcome,
 		CreatedAt:           now,
 		DurationHours:       duration,
-		State:               dao.ProposalActive,
+		State:               ProposalActive,
 		Tx:                  txID,
 		MemberCountSnapshot: memberSnap,
 		StakeSnapshot:       stakeSnap,
@@ -93,20 +92,19 @@ func CreateProposal(payload *string) *string {
 		if ta == nil {
 			sdk.Abort("no valid transfer intent provided")
 		}
-		asset := dao.AssetFromString(ta.Token.String())
-		if asset != prj.FundsAsset {
-			sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
+		if ta.Token != prj.FundsAsset {
+			sdk.Abort(fmt.Sprintf("invalid asset, expected %s", AssetToString(prj.FundsAsset)))
 		}
-		costAmount := dao.FloatToAmount(prj.Config.ProposalCost)
-		providedAmount := dao.FloatToAmount(ta.Limit)
+		costAmount := FloatToAmount(prj.Config.ProposalCost)
+		providedAmount := FloatToAmount(ta.Limit)
 		if providedAmount < costAmount {
 			sdk.Abort(fmt.Sprintf("proposal cost requires at least %f %s", prj.Config.ProposalCost, ta.Token.String()))
 		}
-		mAmount := dao.AmountToInt64(costAmount)
+		mAmount := AmountToInt64(costAmount)
 		sdk.HiveDraw(mAmount, ta.Token)
 		prj.Funds += costAmount
 		saveProjectFinance(prj)
-		emitFundsAdded(prj.ID, callerStr, dao.AmountToFloat(costAmount), ta.Token.String(), false)
+		emitFundsAdded(prj.ID, callerStr, AmountToFloat(costAmount), ta.Token.String(), false)
 	}
 
 	saveProposal(prpsl)
@@ -114,12 +112,12 @@ func CreateProposal(payload *string) *string {
 		incrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
 	for i, txt := range input.OptionsList {
-		opt := dao.ProposalOption{Text: txt}
+		opt := ProposalOption{Text: txt}
 		saveProposalOption(prpsl.ID, uint32(i), &opt)
 	}
 	setCount(ProposalsCount, id+1)
-	emitProposalCreatedEvent(prpsl, prj.ID, dao.AddressToString(callerAddr), input.OptionsList)
-	emitProposalStateChangedEvent(id, dao.ProposalActive)
+	emitProposalCreatedEvent(prpsl, prj.ID, AddressToString(callerAddr), input.OptionsList)
+	emitProposalStateChangedEvent(id, ProposalActive)
 	result := strconv.FormatUint(id, 10)
 	return &result
 }
@@ -141,7 +139,7 @@ func TallyProposal(proposalId *string) *string {
 	prpsl := loadProposal(id)
 	prj := loadProject(prpsl.ProjectID)
 
-	if prpsl.State != dao.ProposalActive {
+	if prpsl.State != ProposalActive {
 		sdk.Abort("proposal not active")
 	}
 	deadline := prpsl.CreatedAt + int64(prpsl.DurationHours)*3600
@@ -157,34 +155,35 @@ func TallyProposal(proposalId *string) *string {
 
 	opts := loadProposalOptions(prpsl.ID, prpsl.OptionCount)
 	for i, opt := range opts {
-		totalVotes += dao.AmountToFloat(opt.WeightTotal)
+		weight := AmountToFloat(opt.WeightTotal)
+		totalVotes += weight
 		voterCount += opt.VoterCount
 
-		if dao.AmountToFloat(opt.WeightTotal) > highestOptionValue {
-			highestOptionValue = dao.AmountToFloat(opt.WeightTotal)
+		if weight > highestOptionValue {
+			highestOptionValue = weight
 			highestOptionId = i
 		}
 	}
 
 	// default to failed
-	prpsl.State = dao.ProposalFailed
+	prpsl.State = ProposalFailed
 	prpsl.ExecutableAt = 0
 
 	if highestOptionId >= 0 && highestOptionValue > 0 {
 		// calculate quorum threshold (round up)
-		quorumThreshold := uint64(math.Ceil(float64(prpsl.MemberCountSnapshot) * (prj.Config.QuorumPercent / 100)))
+		quorumThreshold := uint64(math.Ceil(percentageOf(float64(prpsl.MemberCountSnapshot), prj.Config.QuorumPercent)))
 		// Check quorum
 		quorumMet := voterCount >= quorumThreshold
 		// Check threshold (fraction of total stake at creation)
-		denom := dao.AmountToFloat(prpsl.StakeSnapshot)
-		thresholdMet := denom > 0 && (highestOptionValue/denom) >= prj.Config.ThresholdPercent/100
+		denom := AmountToFloat(prpsl.StakeSnapshot)
+		thresholdMet := denom > 0 && (highestOptionValue/denom) >= (prj.Config.ThresholdPercent/100)
 
 		if quorumMet && thresholdMet {
 			prpsl.ResultOptionID = int32(highestOptionId)
 			if prpsl.IsPoll {
-				prpsl.State = dao.ProposalClosed // polls remain advisory even if yes wins
+				prpsl.State = ProposalClosed // polls remain advisory even if yes wins
 			} else {
-				prpsl.State = dao.ProposalPassed // non-polls become executable actions
+				prpsl.State = ProposalPassed // non-polls become executable actions
 				execReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
 				prpsl.ExecutableAt = execReady
 				emitProposalExecutionDelayEvent(prpsl.ProjectID, prpsl.ID, execReady)
@@ -218,7 +217,10 @@ func ExecuteProposal(proposalID *string) *string {
 	if prj.Paused && !proposalAllowsExecutionWhilePaused(prpsl) {
 		sdk.Abort("project is paused")
 	}
-	if prpsl.State != dao.ProposalPassed {
+	if prpsl.State == ProposalExecuted {
+		sdk.Abort("proposal already executed")
+	}
+	if prpsl.State != ProposalPassed {
 		sdk.Abort(fmt.Sprintf("proposal is %s", prpsl.State))
 	}
 	requiredReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
@@ -234,20 +236,20 @@ func ExecuteProposal(proposalID *string) *string {
 	metaChanged := false
 	if prpsl.Outcome != nil {
 		if prpsl.Outcome.Payout != nil {
-			totalAsked := float64(0)
-			for _, stake := range prpsl.Outcome.Payout {
-				totalAsked += dao.AmountToFloat(stake)
+			// Calculate total and transfer in single loop
+			var totalAsked Amount
+			for _, amount := range prpsl.Outcome.Payout {
+				totalAsked += amount
 			}
-			if dao.AmountToFloat(prj.Funds) < totalAsked {
+			if prj.Funds < totalAsked {
 				sdk.Abort("insufficient funds")
 			}
 			for addr, amount := range prpsl.Outcome.Payout {
-				mAmount := dao.AmountToInt64(amount)
+				mAmount := AmountToInt64(amount)
 				prj.Funds -= amount
-				sdk.HiveTransfer(sdk.Address(dao.AddressToString(addr)), mAmount, sdk.Asset(dao.AssetToString(prj.FundsAsset)))
-				emitFundsRemoved(prj.ID, dao.AddressToString(addr), dao.AmountToFloat(amount), dao.AssetToString(prj.FundsAsset), false)
+				sdk.HiveTransfer(addr, mAmount, prj.FundsAsset)
+				emitFundsRemoved(prj.ID, AddressToString(addr), AmountToFloat(amount), AssetToString(prj.FundsAsset), false)
 				fundsTransferred = true
-
 			}
 		}
 		if prpsl.Outcome.Meta != nil {
@@ -361,13 +363,13 @@ func ExecuteProposal(proposalID *string) *string {
 					metaChanged = true
 					stateChanged = true
 				case "update_owner":
-					newOwnerAddr := dao.AddressFromString(value)
+					newOwnerAddr := AddressFromString(value)
 					if _, exists := loadMember(prj.ID, newOwnerAddr); !exists {
 						sdk.Abort("new owner must be a member")
 					}
 					oldOwner := prj.Owner
 					prj.Owner = newOwnerAddr
-					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "owner", dao.AddressToString(oldOwner), dao.AddressToString(newOwnerAddr))
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "owner", AddressToString(oldOwner), AddressToString(newOwnerAddr))
 					metaChanged = true
 					stateChanged = true
 				case "update_url":
@@ -381,7 +383,7 @@ func ExecuteProposal(proposalID *string) *string {
 		}
 	}
 
-	prpsl.State = dao.ProposalExecuted
+	prpsl.State = ProposalExecuted
 	saveProposal(prpsl)
 	if fundsTransferred {
 		saveProjectFinance(prj)
@@ -407,21 +409,21 @@ func ExecuteProposal(proposalID *string) *string {
 // -----------------------------------------------------------------------------
 
 // saveProposal persists a proposal in contract state.
-func saveProposal(prpsl *dao.Proposal) {
+func saveProposal(prpsl *Proposal) {
 	key := proposalKey(prpsl.ID)
-	data := dao.EncodeProposal(prpsl)
+	data := EncodeProposal(prpsl)
 	sdk.StateSetObject(key, string(data))
 }
 
 // loadProposal retrieves a proposal from contract state by ID.
 // Aborts if not found or if unmarshalling fails.
-func loadProposal(id uint64) *dao.Proposal {
+func loadProposal(id uint64) *Proposal {
 	key := proposalKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
 		sdk.Abort(fmt.Sprintf("proposal %d not found", id))
 	}
-	prpsl, err := dao.DecodeProposal([]byte(*ptr))
+	prpsl, err := DecodeProposal([]byte(*ptr))
 	if err != nil {
 		sdk.Abort(fmt.Sprintf("failed to decode proposal: %v", err))
 	}
@@ -439,33 +441,33 @@ func CancelProposal(payload *string) *string {
 		sdk.Abort("invalid proposal ID")
 	}
 	prpsl := loadProposal(id)
-	if prpsl.State != dao.ProposalActive {
+	if prpsl.State != ProposalActive {
 		sdk.Abort("proposal not active")
 	}
 	prj := loadProject(prpsl.ProjectID)
 
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
+	callerAddr := caller
 	if callerAddr != prpsl.Creator && callerAddr != prj.Owner {
 		sdk.Abort("only creator or owner can cancel")
 	}
 
 	refund := callerAddr != prpsl.Creator && prj.Config.ProposalCost > 0
-	var refundAmount dao.Amount
+	var refundAmount Amount
 	if refund {
-		refundAmount = dao.FloatToAmount(prj.Config.ProposalCost)
+		refundAmount = FloatToAmount(prj.Config.ProposalCost)
 		if prj.Funds < refundAmount {
 			refund = false
 		} else {
 			prj.Funds -= refundAmount
 			saveProjectFinance(prj)
-			mAmount := dao.AmountToInt64(refundAmount)
-			sdk.HiveTransfer(sdk.Address(dao.AddressToString(prpsl.Creator)), mAmount, sdk.Asset(dao.AssetToString(prj.FundsAsset)))
-			emitFundsRemoved(prj.ID, dao.AddressToString(prpsl.Creator), dao.AmountToFloat(refundAmount), dao.AssetToString(prj.FundsAsset), false)
+			mAmount := AmountToInt64(refundAmount)
+			sdk.HiveTransfer(prpsl.Creator, mAmount, prj.FundsAsset)
+			emitFundsRemoved(prj.ID, AddressToString(prpsl.Creator), AmountToFloat(refundAmount), AssetToString(prj.FundsAsset), false)
 		}
 	}
 
-	prpsl.State = dao.ProposalCancelled
+	prpsl.State = ProposalCancelled
 	prpsl.ResultOptionID = -1
 	prpsl.ExecutableAt = 0
 	saveProposal(prpsl)
@@ -474,4 +476,35 @@ func CancelProposal(payload *string) *string {
 	}
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	return strptr("cancelled")
+}
+
+// -----------------------------------------------------------------------------
+// Local helpers
+// -----------------------------------------------------------------------------
+
+// percentageOf calculates the percentage of a value.
+// Example: percentageOf(100, 50.5) returns 50.5
+func percentageOf(value, percent float64) float64 {
+	return value * (percent / 100.0)
+}
+
+// allowsPauseMeta checks whether the meta payload only toggles pause state.
+func allowsPauseMeta(meta map[string]string) bool {
+	if meta == nil {
+		return false
+	}
+	if len(meta) == 1 {
+		if _, ok := meta["toggle_pause"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// proposalAllowsExecutionWhilePaused reuses the meta helper so pause votes can execute safely.
+func proposalAllowsExecutionWhilePaused(prpsl *Proposal) bool {
+	if prpsl == nil || prpsl.Outcome == nil || prpsl.Outcome.Meta == nil {
+		return false
+	}
+	return allowsPauseMeta(prpsl.Outcome.Meta)
 }

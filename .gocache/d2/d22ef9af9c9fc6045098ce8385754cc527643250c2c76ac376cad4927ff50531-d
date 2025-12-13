@@ -1,7 +1,0 @@
-./doc.go
-./option.go
-./parse.go
-./sys.go
-./sys_linux.go
-./sys_unix.go
-./zsys_linux_generic.go

@@ -1,7 +1,0 @@
-./doc.go
-./ipldsch_minima.go
-./ipldsch_satisfaction.go
-./ipldsch_types.go
-./marshal.go
-./multicodec.go
-./unmarshal.go

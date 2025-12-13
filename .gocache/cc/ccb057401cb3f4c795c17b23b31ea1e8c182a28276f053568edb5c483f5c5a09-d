@@ -1,6 +1,0 @@
-./contract_test_utils.go
-./in_memory_state_store.go
-./mock_contracts.go
-./mock_election.go
-./mock_ledger.go
-./test_utils.go

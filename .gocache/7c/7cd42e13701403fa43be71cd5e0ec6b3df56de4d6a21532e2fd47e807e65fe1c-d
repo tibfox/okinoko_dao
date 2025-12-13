@@ -1,7 +1,0 @@
-./adaptive.go
-./doc.go
-./log.go
-./notification.go
-./watchdog.go
-./watchdog_linux.go
-./watermarks.go

@@ -2,15 +2,14 @@ package main
 
 import (
 	"fmt"
-	"okinoko_dao/contract/dao"
 	"okinoko_dao/sdk"
 	"strconv"
 	"strings"
 )
 
 const (
-	FallbackNFTContract                 = "TODO: set default nft contract"
-	FallbackNFTFunction                 = "nft_hasNFTEdition"
+	FallbackNFTContract                 = ""
+	FallbackNFTFunction                 = ""
 	FallbackThresholdPercent            = 50.001
 	FallbackQuorumPercent               = 50.001
 	FallbackProposalDurationHours       = 24
@@ -19,17 +18,6 @@ const (
 	FallbackProposalCost                = 1
 	FallbackProposalCreatorsMembersOnly = true
 	FallbackMembershipPayloadFormat     = "{nft}|{caller}"
-)
-
-// Permission defines access rights for actions within a project.
-type Permission string
-
-const (
-	// PermCreatorOnly restricts an action to the project creator/owner.
-	PermCreatorOnly Permission = "creator"
-
-	// PermAnyMember allows any project member to perform the action.
-	PermAnyMember Permission = "member"
 )
 
 // -----------------------------------------------------------------------------
@@ -44,7 +32,7 @@ func CreateProject(payload *string) *string {
 	input := decodeCreateProjectArgs(payload)
 
 	caller := getSenderAddress()
-	callerAddr := dao.Address(caller)
+	callerAddr := caller
 	callerStr := caller.String()
 
 	// --- get first valid transfer intent ---
@@ -59,13 +47,12 @@ func CreateProject(payload *string) *string {
 	stakeMin := stakeLimit
 	if input.ProjectConfig.StakeMinAmt > 0 {
 		stakeMin = input.ProjectConfig.StakeMinAmt
-		if dao.FloatToAmount(stakeMin) > dao.FloatToAmount(stakeLimit) {
+		if FloatToAmount(stakeMin) > FloatToAmount(stakeLimit) {
 			sdk.Abort(fmt.Sprintf("transfer limit %f < StakeMinAmt %f", stakeLimit, stakeMin))
 		}
 	} else {
 		input.ProjectConfig.StakeMinAmt = stakeLimit
 	}
-	initialTrasurey := stakeLimit - stakeMin
 
 	// --- create project ---
 	id := getCount(ProjectsCount)
@@ -76,11 +63,12 @@ func CreateProject(payload *string) *string {
 		txID = *txPtr
 	}
 
-	stakeAmount := dao.FloatToAmount(ta.Limit - initialTrasurey)
-	treasuryAmount := dao.FloatToAmount(initialTrasurey)
-	depositAmount := stakeAmount + treasuryAmount
+	// Calculate amounts to avoid rounding errors
+	stakeAmount := FloatToAmount(stakeMin)
+	depositAmount := FloatToAmount(ta.Limit)
+	treasuryAmount := depositAmount - stakeAmount
 
-	prj := dao.Project{
+	prj := Project{
 		ID:          id,
 		Owner:       callerAddr,
 		Name:        input.Name,
@@ -88,7 +76,7 @@ func CreateProject(payload *string) *string {
 		URL:         input.URL,
 		Metadata:    input.Metadata,
 		Funds:       treasuryAmount,
-		FundsAsset:  dao.Asset(ta.Token),
+		FundsAsset:  ta.Token,
 		Paused:      false,
 		Tx:          txID,
 		StakeTotal:  stakeAmount,
@@ -96,7 +84,7 @@ func CreateProject(payload *string) *string {
 	}
 	prj.Config = input.ProjectConfig
 
-	creatorMember := dao.Member{
+	creatorMember := Member{
 		Address:      callerAddr,
 		Stake:        stakeAmount,
 		JoinedAt:     now,
@@ -104,7 +92,7 @@ func CreateProject(payload *string) *string {
 		Reputation:   0,
 	}
 	// draw the funds
-	mAmount := dao.AmountToInt64(depositAmount)
+	mAmount := AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
 	saveMember(prj.ID, &creatorMember)
 	// save project
@@ -112,8 +100,8 @@ func CreateProject(payload *string) *string {
 	setCount(ProjectsCount, id+1)
 
 	emitProjectCreatedEvent(&prj, callerStr)
-	stakeAmountFloat := dao.AmountToFloat(stakeAmount)
-	treasuryAmountFloat := dao.AmountToFloat(treasuryAmount)
+	stakeAmountFloat := AmountToFloat(stakeAmount)
+	treasuryAmountFloat := AmountToFloat(treasuryAmount)
 	emitFundsAdded(prj.ID, callerStr, stakeAmountFloat, tokenStr, true)
 	emitFundsAdded(prj.ID, callerStr, treasuryAmountFloat, tokenStr, false)
 	result := strconv.FormatUint(id, 10)
@@ -135,69 +123,44 @@ func JoinProject(projectID *string) *string {
 		sdk.Abort("project paused")
 	}
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
+	callerAddr := caller
 
 	if _, exists := loadMember(prj.ID, callerAddr); exists {
 		sdk.Abort("already a member")
 	}
 
-	if prj.Config.MembershipNFT != nil &&
-		prj.Config.MembershipNFTContract != nil &&
-		prj.Config.MembershipNFTContractFunction != nil &&
-		*prj.Config.MembershipNFTContract != "" &&
-		*prj.Config.MembershipNFTContractFunction != "" {
-		// check if caller is owner of any edition of the membership nft
-		// GetNFTOwnedEditionsArgs specifies the arguments to query editions owned by an address.
-
-		nftContract := prj.Config.MembershipNFTContract
-		if nftContract == nil {
-			nftContract = strptr(FallbackNFTContract)
-		}
-
-		nftFunction := prj.Config.MembershipNFTContractFunction
-		if nftFunction == nil {
-			nftFunction = strptr(FallbackNFTFunction)
-		}
-		payload := formatMembershipPayload(prj.Config.MembershipNftPayloadFormat, UInt64ToString(*prj.Config.MembershipNFT), dao.AddressToString(callerAddr))
-
-		editions := sdk.ContractCall(
-			*nftContract,
-			*nftFunction,
-			payload,
-			nil)
-		if editions == nil || *editions == "[]" || *editions == "" {
-			sdk.Abort("membership nft not owned")
-		}
+	// Check NFT membership requirement
+	if !checkNFTMembership(prj, callerAddr) {
+		sdk.Abort("membership nft not owned")
 	}
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow()
 	if ta == nil {
 		sdk.Abort("no valid transfer intent provided")
 	}
-	intentAsset := dao.AssetFromString(ta.Token.String())
-	if intentAsset != prj.FundsAsset {
-		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
+	if ta.Token != prj.FundsAsset {
+		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", AssetToString(prj.FundsAsset)))
 	}
 
-	if prj.Config.VotingSystem == dao.VotingSystemDemocratic {
-		expectedStake := dao.FloatToAmount(prj.Config.StakeMinAmt)
-		providedStake := dao.FloatToAmount(ta.Limit)
+	if prj.Config.VotingSystem == VotingSystemDemocratic {
+		expectedStake := FloatToAmount(prj.Config.StakeMinAmt)
+		providedStake := FloatToAmount(ta.Limit)
 		if providedStake != expectedStake {
 			sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
 		}
 	}
 
-	if prj.Config.VotingSystem == dao.VotingSystemStake {
-		requiredStake := dao.FloatToAmount(prj.Config.StakeMinAmt)
-		providedStake := dao.FloatToAmount(ta.Limit)
+	if prj.Config.VotingSystem == VotingSystemStake {
+		requiredStake := FloatToAmount(prj.Config.StakeMinAmt)
+		providedStake := FloatToAmount(ta.Limit)
 		if providedStake < requiredStake {
 			sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
 		}
 	}
 	now := nowUnix()
 
-	depositAmount := dao.FloatToAmount(ta.Limit)
-	newMember := dao.Member{
+	depositAmount := FloatToAmount(ta.Limit)
+	newMember := Member{
 		Address:      callerAddr,
 		Stake:        depositAmount,
 		JoinedAt:     now,
@@ -207,11 +170,11 @@ func JoinProject(projectID *string) *string {
 	prj.MemberCount++
 	prj.StakeTotal += depositAmount
 	// draw the funds
-	mAmount := dao.AmountToInt64(depositAmount)
+	mAmount := AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
 	saveProjectFinance(prj)
-	emitJoinedEvent(prj.ID, dao.AddressToString(callerAddr))
-	emitFundsAdded(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(depositAmount), ta.Token.String(), true)
+	emitJoinedEvent(prj.ID, AddressToString(callerAddr))
+	emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
 	return strptr("joined")
 }
 
@@ -226,7 +189,7 @@ func LeaveProject(projectID *string) *string {
 		sdk.Abort("invalid project ID")
 	}
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
+	callerAddr := caller
 	prj := loadProject(id)
 	if prj.Paused {
 		sdk.Abort("project paused")
@@ -249,8 +212,8 @@ func LeaveProject(projectID *string) *string {
 
 	// refund stake
 	withdraw := member.Stake
-	mAmount := dao.AmountToInt64(withdraw)
-	sdk.HiveTransfer(caller, mAmount, sdk.Asset(dao.AssetToString(prj.FundsAsset)))
+	mAmount := AmountToInt64(withdraw)
+	sdk.HiveTransfer(caller, mAmount, prj.FundsAsset)
 
 	deleteMember(prj.ID, callerAddr)
 	if prj.MemberCount > 0 {
@@ -258,14 +221,45 @@ func LeaveProject(projectID *string) *string {
 	}
 	prj.StakeTotal -= withdraw
 	saveProjectFinance(prj)
-	emitLeaveEvent(prj.ID, dao.AddressToString(callerAddr))
-	emitFundsRemoved(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(withdraw), dao.AssetToString(prj.FundsAsset), true)
+	emitLeaveEvent(prj.ID, AddressToString(callerAddr))
+	emitFundsRemoved(prj.ID, AddressToString(callerAddr), AmountToFloat(withdraw), AssetToString(prj.FundsAsset), true)
 	return strptr("exit finished")
 }
 
 // hasActivePayout checks payout locks to avoid releasing stake while funds are still promised.
-func hasActivePayout(projectID uint64, member dao.Address) bool {
+func hasActivePayout(projectID uint64, member sdk.Address) bool {
 	return getPayoutLockCount(projectID, member) > 0
+}
+
+// checkNFTMembership verifies if caller owns the required NFT for membership.
+// Returns true if NFT check passes or if no NFT is required.
+func checkNFTMembership(prj *Project, callerAddr sdk.Address) bool {
+	if prj.Config.MembershipNFT == nil ||
+		prj.Config.MembershipNFTContract == nil ||
+		prj.Config.MembershipNFTContractFunction == nil {
+		return true
+	}
+
+	contract := prj.Config.MembershipNFTContract
+	function := prj.Config.MembershipNFTContractFunction
+	if contract == nil || function == nil {
+		return true
+	}
+
+	contractName := strings.TrimSpace(*contract)
+	functionName := strings.TrimSpace(*function)
+	if contractName == "" || functionName == "" {
+		return true
+	}
+
+	payload := formatMembershipPayload(
+		prj.Config.MembershipNftPayloadFormat,
+		UInt64ToString(*prj.Config.MembershipNFT),
+		AddressToString(callerAddr),
+	)
+
+	editions := sdk.ContractCall(contractName, functionName, payload, nil)
+	return editions != nil && *editions != "[]" && *editions != ""
 }
 
 // AddFunds handles the double-path deposit (treasury vs stake) and still validates asset + transfer.allow.
@@ -276,8 +270,8 @@ func AddFunds(payload *string) *string {
 	input := decodeAddFundsArgs(payload)
 	prj := loadProject(input.ProjectID)
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
-	var stakingMember *dao.Member
+	callerAddr := caller
+	var stakingMember *Member
 
 	// --- get first valid transfer intent ---
 	ta := getFirstTransferAllow()
@@ -286,13 +280,12 @@ func AddFunds(payload *string) *string {
 	}
 
 	// validate intent token matches project treasury asset
-	asset := dao.AssetFromString(ta.Token.String())
-	if asset != prj.FundsAsset {
-		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", dao.AssetToString(prj.FundsAsset)))
+	if ta.Token != prj.FundsAsset {
+		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", AssetToString(prj.FundsAsset)))
 	}
 
 	if input.ToStake {
-		if prj.Config.VotingSystem == dao.VotingSystemDemocratic {
+		if prj.Config.VotingSystem == VotingSystemDemocratic {
 			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
 		}
 		member := getMember(prj.ID, callerAddr)
@@ -300,8 +293,8 @@ func AddFunds(payload *string) *string {
 	}
 
 	// draw the funds
-	depositAmount := dao.FloatToAmount(ta.Limit)
-	mAmount := dao.AmountToInt64(depositAmount)
+	depositAmount := FloatToAmount(ta.Limit)
+	mAmount := AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
 
 	if input.ToStake {
@@ -317,15 +310,15 @@ func AddFunds(payload *string) *string {
 	}
 
 	saveProjectFinance(prj)
-	emitFundsAdded(prj.ID, dao.AddressToString(callerAddr), dao.AmountToFloat(depositAmount), ta.Token.String(), input.ToStake)
+	emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), input.ToStake)
 	return strptr("funds added")
 }
 
 // getMember fetches the cached member or aborts with a readable adress on failure.
-func getMember(projectID uint64, user dao.Address) dao.Member {
+func getMember(projectID uint64, user sdk.Address) Member {
 	member, ok := loadMember(projectID, user)
 	if !ok {
-		sdk.Abort(fmt.Sprintf("%s is not a member", dao.AddressToString(user)))
+		sdk.Abort(fmt.Sprintf("%s is not a member", AddressToString(user)))
 	}
 	return *member
 }
@@ -353,8 +346,8 @@ func TransferProjectOwnership(payload *string) *string {
 		sdk.Abort("new owner address required")
 	}
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
-	newOwnerAddr := dao.AddressFromString(newOwnerStr)
+	callerAddr := caller
+	newOwnerAddr := AddressFromString(newOwnerStr)
 	prj := loadProject(id)
 	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can transfer")
@@ -392,7 +385,7 @@ func EmergencyPauseImmediate(payload *string) *string {
 		pause = parseBoolField(parts[1])
 	}
 	caller := getSenderAddress()
-	callerAddr := dao.AddressFromString(caller.String())
+	callerAddr := caller
 	prj := loadProject(id)
 	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can pause/unpause")
@@ -406,7 +399,7 @@ func EmergencyPauseImmediate(payload *string) *string {
 }
 
 // saveProject persists all project parts (meta, config, finance).
-func saveProject(prj *dao.Project) {
+func saveProject(prj *Project) {
 	saveProjectMeta(prj)
 	saveProjectConfig(prj)
 	saveProjectFinance(prj)
@@ -414,11 +407,11 @@ func saveProject(prj *dao.Project) {
 
 // loadProject retrieves a project from contract storage by ID.
 // Aborts if the project does not exist.
-func loadProject(id uint64) *dao.Project {
+func loadProject(id uint64) *Project {
 	meta := loadProjectMeta(id)
 	cfg := loadProjectConfig(id)
 	fin := loadProjectFinance(id)
-	return &dao.Project{
+	return &Project{
 		ID:          id,
 		Owner:       meta.Owner,
 		Name:        meta.Name,
@@ -435,8 +428,8 @@ func loadProject(id uint64) *dao.Project {
 	}
 }
 
-func saveProjectMeta(prj *dao.Project) {
-	meta := dao.ProjectMeta{
+func saveProjectMeta(prj *Project) {
+	meta := ProjectMeta{
 		Owner:       prj.Owner,
 		Name:        prj.Name,
 		Description: prj.Description,
@@ -445,59 +438,59 @@ func saveProjectMeta(prj *dao.Project) {
 		Metadata:    prj.Metadata,
 		URL:         prj.URL,
 	}
-	data := dao.EncodeProjectMeta(&meta)
+	data := EncodeProjectMeta(&meta)
 	stateSetIfChanged(projectKey(prj.ID), string(data))
 }
 
-func loadProjectMeta(id uint64) *dao.ProjectMeta {
+func loadProjectMeta(id uint64) *ProjectMeta {
 	key := projectKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
 		sdk.Abort(fmt.Sprintf("project %d not found", id))
 	}
-	meta, err := dao.DecodeProjectMeta([]byte(*ptr))
+	meta, err := DecodeProjectMeta([]byte(*ptr))
 	if err != nil {
 		sdk.Abort(fmt.Sprintf("failed to decode project meta: %v", err))
 	}
 	return meta
 }
 
-func saveProjectConfig(prj *dao.Project) {
-	data := dao.EncodeProjectConfig(&prj.Config)
+func saveProjectConfig(prj *Project) {
+	data := EncodeProjectConfig(&prj.Config)
 	stateSetIfChanged(projectConfigKey(prj.ID), string(data))
 }
 
-func loadProjectConfig(id uint64) *dao.ProjectConfig {
+func loadProjectConfig(id uint64) *ProjectConfig {
 	key := projectConfigKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
 		sdk.Abort("project config not found")
 	}
-	cfg, err := dao.DecodeProjectConfig([]byte(*ptr))
+	cfg, err := DecodeProjectConfig([]byte(*ptr))
 	if err != nil {
 		sdk.Abort(fmt.Sprintf("failed to decode project config: %v", err))
 	}
 	return cfg
 }
 
-func saveProjectFinance(prj *dao.Project) {
-	fin := dao.ProjectFinance{
+func saveProjectFinance(prj *Project) {
+	fin := ProjectFinance{
 		Funds:       prj.Funds,
 		FundsAsset:  prj.FundsAsset,
 		StakeTotal:  prj.StakeTotal,
 		MemberCount: prj.MemberCount,
 	}
-	data := dao.EncodeProjectFinance(&fin)
+	data := EncodeProjectFinance(&fin)
 	stateSetIfChanged(projectFinanceKey(prj.ID), string(data))
 }
 
-func loadProjectFinance(id uint64) *dao.ProjectFinance {
+func loadProjectFinance(id uint64) *ProjectFinance {
 	key := projectFinanceKey(id)
 	ptr := sdk.StateGetObject(key)
 	if ptr == nil || *ptr == "" {
 		sdk.Abort("project finance not found")
 	}
-	fin, err := dao.DecodeProjectFinance([]byte(*ptr))
+	fin, err := DecodeProjectFinance([]byte(*ptr))
 	if err != nil {
 		sdk.Abort(fmt.Sprintf("failed to decode project finance: %v", err))
 	}

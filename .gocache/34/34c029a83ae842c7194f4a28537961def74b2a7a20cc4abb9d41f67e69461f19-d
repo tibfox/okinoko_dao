@@ -1,8 +1,0 @@
-./doc.go
-./jsonCommon.go
-./jsonDecoder.go
-./jsonDecoderTerminals.go
-./jsonEncoder.go
-./jsonEncoderTerminals.go
-./jsonHelpers.go
-./jsonOptions.go

@@ -1,7 +1,0 @@
-./consensus.go
-./ledger_system.go
-./state_engine.go
-./system_txs.go
-./transactions.go
-./types.go
-./utils.go

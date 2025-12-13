@@ -1,11 +1,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Okinoko DAO: A universal DAO for the vsc network
-// created by tibfox 2025-08-12
+// modified: tibfox 2025-12-13
 ////////////////////////////////////////////////////////////////////////////////
 
 package main
 
-// main is left empty on purpose because the wasm entrypoints are exported funcs above, ja?
+// main is left empty on purpose
 func main() {
 
 }
