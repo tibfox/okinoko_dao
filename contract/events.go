@@ -12,6 +12,8 @@ import (
 func sanitizeEventValue(val string) string {
 	val = strings.ReplaceAll(val, "|", " ")
 	val = strings.ReplaceAll(val, "\n", " ")
+	val = strings.ReplaceAll(val, ";", ",")  // Semicolon used in option separator
+	val = strings.ReplaceAll(val, ":", "-")  // Colon used in option text:url separator
 	return strings.TrimSpace(val)
 }
 
@@ -45,19 +47,21 @@ func formatMetadataMap(meta map[string]string) string {
 	return strings.Join(parts, ";")
 }
 
-func formatPayoutMap(payout map[sdk.Address]Amount) string {
+func formatPayoutMap(payout map[sdk.Address]PayoutEntry) string {
 	if len(payout) == 0 {
 		return ""
 	}
-	type payoutEntry struct {
+	type payoutEntryFormatted struct {
 		addr   string
 		amount Amount
+		asset  sdk.Asset
 	}
-	entries := make([]payoutEntry, 0, len(payout))
-	for addr, amt := range payout {
-		entries = append(entries, payoutEntry{
+	entries := make([]payoutEntryFormatted, 0, len(payout))
+	for addr, entry := range payout {
+		entries = append(entries, payoutEntryFormatted{
 			addr:   AddressToString(addr),
-			amount: amt,
+			amount: entry.Amount,
+			asset:  entry.Asset,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -65,18 +69,24 @@ func formatPayoutMap(payout map[sdk.Address]Amount) string {
 	})
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, fmt.Sprintf("%s:%f", entry.addr, AmountToFloat(entry.amount)))
+		out = append(out, fmt.Sprintf("%s:%f:%s", entry.addr, AmountToFloat(entry.amount), AssetToString(entry.asset)))
 	}
 	return strings.Join(out, ";")
 }
 
-func formatOptionsList(opts []string) string {
+func formatOptionsList(opts []ProposalOptionInput) string {
 	if len(opts) == 0 {
 		return ""
 	}
 	clean := make([]string, 0, len(opts))
 	for _, opt := range opts {
-		clean = append(clean, sanitizeEventValue(opt))
+		text := sanitizeEventValue(opt.Text)
+		url := sanitizeEventValue(opt.URL)
+		if url != "" {
+			clean = append(clean, fmt.Sprintf("%s:%s", text, url))
+		} else {
+			clean = append(clean, text)
+		}
 	}
 	return strings.Join(clean, ";")
 }
@@ -129,7 +139,7 @@ func emitProjectCreatedEvent(project *Project, createdByAddress string) {
 }
 
 // emitProposalCreatedEvent keeps observers updated with a short pc line for every new idea.
-func emitProposalCreatedEvent(prpsl *Proposal, projectID uint64, creator string, options []string) {
+func emitProposalCreatedEvent(prpsl *Proposal, projectID uint64, creator string, options []ProposalOptionInput) {
 	var payoutStr string
 	var outcomeMeta string
 	if prpsl.Outcome != nil {

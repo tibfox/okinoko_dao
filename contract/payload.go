@@ -79,12 +79,14 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 	payouts := parsePayoutField(get(6))
 	metaOutcome := parseMetadataField(get(7))
 	metadata := normalizeOptionalField(get(8))
+	iccCalls := parseICCField(get(10))
 
 	var outcome *ProposalOutcome
-	if len(payouts) > 0 || len(metaOutcome) > 0 {
+	if len(payouts) > 0 || len(metaOutcome) > 0 || len(iccCalls) > 0 {
 		outcome = &ProposalOutcome{
 			Meta:   metaOutcome,
 			Payout: payouts,
+			ICC:    iccCalls,
 		}
 	}
 
@@ -193,18 +195,59 @@ func parseBoolField(val string) bool {
 }
 
 // parseOptionsField splits the list by ';' and trims each option.
-func parseOptionsField(val string) []string {
+// Each option can be in format "text" or "text###url"
+// The delimiter ### is used to separate text from URL to avoid conflicts with colons in URLs
+func parseOptionsField(val string) []ProposalOptionInput {
 	val = strings.TrimSpace(val)
 	if val == "" {
-		return []string{}
+		return []ProposalOptionInput{}
 	}
 	raw := strings.Split(val, ";")
-	opts := make([]string, 0, len(raw))
+	opts := make([]ProposalOptionInput, 0, len(raw))
 	for _, opt := range raw {
 		opt = strings.TrimSpace(opt)
-		if opt != "" {
-			opts = append(opts, opt)
+		if opt == "" {
+			continue
 		}
+
+		// Split text from optional URL using ### delimiter
+		var text, url string
+		delimiterIdx := strings.Index(opt, "###")
+
+		if delimiterIdx > 0 {
+			// Found delimiter - split text and URL
+			text = strings.TrimSpace(opt[:delimiterIdx])
+			url = strings.TrimSpace(opt[delimiterIdx+3:])
+		} else if delimiterIdx == 0 {
+			// Delimiter at the beginning with no text
+			sdk.Abort("option text cannot be empty")
+		} else {
+			// No delimiter found - entire string is text
+			text = opt
+		}
+
+		// Validate lengths
+		if len(text) == 0 {
+			sdk.Abort("option text cannot be empty")
+		}
+		if len(text) > MaxOptionTextLength {
+			sdk.Abort(fmt.Sprintf("option text exceeds maximum length of %d characters", MaxOptionTextLength))
+		}
+		if len(url) > MaxURLLength {
+			sdk.Abort(fmt.Sprintf("option URL exceeds maximum length of %d characters", MaxURLLength))
+		}
+
+		// Validate URL scheme if URL is provided - only HTTPS allowed
+		if url != "" {
+			if !strings.HasPrefix(url, "https://") {
+				sdk.Abort("option URL must start with https://")
+			}
+		}
+
+		opts = append(opts, ProposalOptionInput{
+			Text: text,
+			URL:  url,
+		})
 	}
 	return opts
 }
@@ -291,32 +334,68 @@ func normalizeOptionalField(val string) string {
 	return val
 }
 
-// parsePayoutField parses addr:amount entries and converts floats to Amount scale.
-func parsePayoutField(val string) map[sdk.Address]Amount {
+// parsePayoutField parses payout entries in format addr:amount:asset or addr:amount (legacy).
+// New format: addr:amount:asset (e.g., "hive:alice:10:hive")
+// Legacy format: addr:amount (e.g., "hive:alice:10") - asset will be nil
+func parsePayoutField(val string) map[sdk.Address]PayoutEntry {
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return nil
 	}
-	payouts := map[sdk.Address]Amount{}
+	payouts := map[sdk.Address]PayoutEntry{}
 	entries := strings.Split(val, ";")
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
-		idx := strings.LastIndex(entry, ":")
-		if idx <= 0 || idx == len(entry)-1 {
-			sdk.Abort("invalid payout entry (addr:amount)")
+
+		// Split by colons to detect format
+		parts := strings.Split(entry, ":")
+		if len(parts) < 2 {
+			sdk.Abort("invalid payout entry format (need addr:amount or addr:amount:asset)")
 		}
-		addr := AddressFromString(strings.TrimSpace(entry[:idx]))
-		amountStr := strings.TrimSpace(entry[idx+1:])
-		amount, err := strconv.ParseFloat(amountStr, 64)
-		if err != nil {
-			sdk.Abort("invalid payout amount")
+
+		// Find the amount position (last numeric part before optional asset)
+		// Format: protocol:address:amount or protocol:address:amount:asset
+		var addr sdk.Address
+		var amount Amount
+		var asset sdk.Asset
+
+		// Try new format first: addr:amount:asset
+		if len(parts) >= 3 {
+			// Last part might be asset
+			lastPart := parts[len(parts)-1]
+			secondLastPart := parts[len(parts)-2]
+
+			// Check if last part is an asset (non-numeric)
+			if _, err := strconv.ParseFloat(lastPart, 64); err != nil {
+				// Last part is asset
+				asset = AssetFromString(lastPart)
+				amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
+				addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
+			} else {
+				// Legacy format: last part is amount
+				amount = FloatToAmount(mustParseFloat(lastPart, "invalid payout amount"))
+				addr = AddressFromString(strings.Join(parts[:len(parts)-1], ":"))
+				asset = sdk.Asset("") // Will be filled with project's default asset
+			}
+		} else {
+			sdk.Abort("invalid payout entry (need at least addr:amount)")
 		}
-		payouts[addr] = FloatToAmount(amount)
+
+		payouts[addr] = PayoutEntry{Amount: amount, Asset: asset}
 	}
 	return payouts
+}
+
+// mustParseFloat parses a float or aborts with the given message.
+func mustParseFloat(s string, errMsg string) float64 {
+	val, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		sdk.Abort(errMsg)
+	}
+	return val
 }
 
 // parseAddressList accepts comma/semicolon separated addresses and normalizes them.
@@ -414,4 +493,106 @@ func decodeWhitelistPayload(payload *string) (uint64, []sdk.Address) {
 		sdk.Abort("whitelist payload requires addresses")
 	}
 	return projectID, addresses
+}
+
+// parseICCField parses inter-contract call entries.
+// Format: contract_addr|function|payload|asset1=amount1,asset2=amount2;contract_addr2|...
+// Example: "contract:foo|myFunc|{\"arg\":1}|HIVE=1.5,HBD=2.0;contract:bar|otherFunc|{}|HIVE=1.0"
+// Assets are optional. Multiple calls are separated by semicolons.
+func parseICCField(val string) []InterContractCall {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+
+	calls := []InterContractCall{}
+	entries := strings.Split(val, ";")
+
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		// Split by pipes to get: contract_addr|function|payload[|assets]
+		parts := strings.Split(entry, "|")
+		if len(parts) < 3 {
+			sdk.Abort("invalid ICC entry format (need contract|function|payload[|assets])")
+		}
+
+		contractAddr := strings.TrimSpace(parts[0])
+		function := strings.TrimSpace(parts[1])
+		payload := strings.TrimSpace(parts[2])
+
+		if contractAddr == "" {
+			sdk.Abort("ICC contract address cannot be empty")
+		}
+		if function == "" {
+			sdk.Abort("ICC function cannot be empty")
+		}
+
+		// Parse assets if provided
+		var assets map[sdk.Asset]Amount
+		if len(parts) >= 4 && strings.TrimSpace(parts[3]) != "" {
+			assets = parseICCAssets(parts[3])
+		}
+
+		calls = append(calls, InterContractCall{
+			ContractAddress: contractAddr,
+			Function:        function,
+			Payload:         payload,
+			Assets:          assets,
+		})
+	}
+
+	return calls
+}
+
+// parseICCAssets parses asset mappings for ICC.
+// Format: asset1=amount1,asset2=amount2
+// Example: "HIVE=1.5,HBD=2.0"
+// Each asset can only appear once.
+func parseICCAssets(val string) map[sdk.Asset]Amount {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+
+	assets := map[sdk.Asset]Amount{}
+	pairs := strings.Split(val, ",")
+
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			sdk.Abort("invalid ICC asset format (need ASSET=amount)")
+		}
+
+		assetStr := strings.TrimSpace(strings.ToUpper(parts[0]))
+		amountStr := strings.TrimSpace(parts[1])
+
+		if assetStr == "" {
+			sdk.Abort("ICC asset name cannot be empty")
+		}
+
+		asset := AssetFromString(assetStr)
+
+		// Check if asset already exists
+		if _, exists := assets[asset]; exists {
+			sdk.Abort(fmt.Sprintf("ICC asset %s specified multiple times", assetStr))
+		}
+
+		amount := FloatToAmount(mustParseFloat(amountStr, "invalid ICC asset amount"))
+		if amount <= 0 {
+			sdk.Abort("ICC asset amount must be positive")
+		}
+
+		assets[asset] = amount
+	}
+
+	return assets
 }

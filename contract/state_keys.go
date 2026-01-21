@@ -2,27 +2,6 @@ package main
 
 import "okinoko_dao/sdk"
 
-const (
-	// kProjectMeta stores serialized ProjectMeta blobs.
-	kProjectMeta byte = 0x01
-	// kProjectConfig stores ProjectConfig fragments so config updates touch fewer bytes.
-	kProjectConfig byte = 0x02
-	// kProjectFinance tracks ProjectFinance (funds, member counts, stake totals).
-	kProjectFinance byte = 0x03
-	// kProjectMember houses encoded Member structs (project scoped).
-	kProjectMember byte = 0x04
-	// kProjectPayoutLock counts pending payouts per member to guard exits.
-	kProjectPayoutLock byte = 0x05
-	// kProjectWhitelist flags pending manual membership approvals.
-	kProjectWhitelist byte = 0x06
-	// kProposalMeta contains encoded Proposal records.
-	kProposalMeta byte = 0x10
-	// kProposalOption stores ProposalOption entries indexed by proposal+option index.
-	kProposalOption byte = 0x11
-	// kVoteReceipt is reserved for future vote receipts (unused today but kept for layout clarity).
-	kVoteReceipt byte = 0x20
-)
-
 // packU64LEInline sprinkles a uint64 into dst in little-endian order so our keys stay compact.
 func packU64LEInline(x uint64, dst []byte) {
 	dst[0] = byte(x)
@@ -127,4 +106,29 @@ func proposalOptionKey(id uint64, idx uint32) string {
 	packU64LEInline(id, buf[1:])
 	packU32LEInline(idx, buf[9:])
 	return string(buf[:])
+}
+
+// memberStakeHistoryKey stores a member's stake history entry at a specific increment.
+// Key format: kMemberStakeHistory|projectID|address|increment
+// Value format: {stake}_{timestamp}
+func memberStakeHistoryKey(projectID uint64, addr sdk.Address, increment uint64) string {
+	addrStr := AddressToString(addr)
+	buf := make([]byte, 0, 1+8+len(addrStr)+8)
+	buf = append(buf, kMemberStakeHistory)
+	buf = packU64LE(projectID, buf)
+	buf = append(buf, addrStr...)
+	buf = packU64LE(increment, buf)
+	return string(buf)
+}
+
+// projectTreasuryKey stores a single asset balance in the project's multi-asset treasury.
+// Key format: kProjectTreasury|projectID|asset
+// Value format: {amount}
+func projectTreasuryKey(projectID uint64, asset sdk.Asset) string {
+	assetStr := asset.String()
+	buf := make([]byte, 0, 1+8+len(assetStr))
+	buf = append(buf, kProjectTreasury)
+	buf = packU64LE(projectID, buf)
+	buf = append(buf, assetStr...)
+	return string(buf)
 }

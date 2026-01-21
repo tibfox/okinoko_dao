@@ -31,9 +31,13 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct := test_utils.NewContractTest()
 	ct.RegisterContract(ContractID, ownerAddress, ContractWasm)
 	ct.Deposit("hive:someone", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someone", 200000, ledgerDb.AssetHbd)
 	ct.Deposit("hive:someoneelse", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someoneelse", 200000, ledgerDb.AssetHbd)
 	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHbd)
 	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHbd)
 	return &ct
 }
 

@@ -2,22 +2,10 @@ package main
 
 import (
 	"fmt"
-	"okinoko_dao/sdk"
 	"strconv"
 	"strings"
-)
 
-const (
-	FallbackNFTContract                 = ""
-	FallbackNFTFunction                 = ""
-	FallbackThresholdPercent            = 50.001
-	FallbackQuorumPercent               = 50.001
-	FallbackProposalDurationHours       = 24
-	FallbackExecutionDelayHours         = 4
-	FallbackLeaveCooldownHours          = 24
-	FallbackProposalCost                = 1
-	FallbackProposalCreatorsMembersOnly = true
-	FallbackMembershipPayloadFormat     = "{nft}|{caller}"
+	"okinoko_dao/sdk"
 )
 
 // -----------------------------------------------------------------------------
@@ -85,16 +73,23 @@ func CreateProject(payload *string) *string {
 	prj.Config = input.ProjectConfig
 
 	creatorMember := Member{
-		Address:      callerAddr,
-		Stake:        stakeAmount,
-		JoinedAt:     now,
-		LastActionAt: now,
-		Reputation:   0,
+		Address:        callerAddr,
+		Stake:          stakeAmount,
+		JoinedAt:       now,
+		LastActionAt:   now,
+		Reputation:     0,
+		StakeIncrement: 0,
 	}
 	// draw the funds
 	mAmount := AmountToInt64(depositAmount)
 	sdk.HiveDraw(mAmount, ta.Token)
 	saveMember(prj.ID, &creatorMember)
+	// Save initial stake history
+	saveStakeHistory(prj.ID, callerAddr, stakeAmount, now, 0)
+	// Initialize treasury with the treasury amount
+	if treasuryAmount > 0 {
+		addTreasuryFunds(prj.ID, ta.Token, treasuryAmount)
+	}
 	// save project
 	saveProject(&prj)
 	setCount(ProjectsCount, id+1)
@@ -103,7 +98,9 @@ func CreateProject(payload *string) *string {
 	stakeAmountFloat := AmountToFloat(stakeAmount)
 	treasuryAmountFloat := AmountToFloat(treasuryAmount)
 	emitFundsAdded(prj.ID, callerStr, stakeAmountFloat, tokenStr, true)
-	emitFundsAdded(prj.ID, callerStr, treasuryAmountFloat, tokenStr, false)
+	if treasuryAmount > 0 {
+		emitFundsAdded(prj.ID, callerStr, treasuryAmountFloat, tokenStr, false)
+	}
 	result := strconv.FormatUint(id, 10)
 	return &result
 }
@@ -167,12 +164,15 @@ func JoinProject(projectID *string) *string {
 
 	depositAmount := FloatToAmount(ta.Limit)
 	newMember := Member{
-		Address:      callerAddr,
-		Stake:        depositAmount,
-		JoinedAt:     now,
-		LastActionAt: now,
+		Address:        callerAddr,
+		Stake:          depositAmount,
+		JoinedAt:       now,
+		LastActionAt:   now,
+		StakeIncrement: 0,
 	}
 	saveMember(prj.ID, &newMember)
+	// Save initial stake history
+	saveStakeHistory(prj.ID, callerAddr, depositAmount, now, 0)
 	prj.MemberCount++
 	prj.StakeTotal += depositAmount
 	// draw the funds
@@ -257,9 +257,14 @@ func LeaveProject(projectID *string) *string {
 	mAmount := AmountToInt64(withdraw)
 	sdk.HiveTransfer(caller, mAmount, prj.FundsAsset)
 
+	// Delete all stake history for this member
+	deleteAllStakeHistory(prj.ID, callerAddr, member.StakeIncrement)
 	deleteMember(prj.ID, callerAddr)
 	if prj.MemberCount > 0 {
 		prj.MemberCount--
+	}
+	if prj.StakeTotal < withdraw {
+		sdk.Abort("accounting error: stake total mismatch")
 	}
 	prj.StakeTotal -= withdraw
 	saveProjectFinance(prj)
@@ -321,18 +326,18 @@ func AddFunds(payload *string) *string {
 		sdk.Abort("no valid transfer intent provided")
 	}
 
-	// validate intent token matches project treasury asset
-	if ta.Token != prj.FundsAsset {
-		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", AssetToString(prj.FundsAsset)))
-	}
-
 	if input.ToStake {
+		// For staking, we still require the original project asset (backwards compatibility)
+		if ta.Token != prj.FundsAsset {
+			sdk.Abort(fmt.Sprintf("staking requires %s", AssetToString(prj.FundsAsset)))
+		}
 		if prj.Config.VotingSystem == VotingSystemDemocratic {
 			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
 		}
 		member := getMember(prj.ID, callerAddr)
 		stakingMember = &member
 	}
+	// For treasury deposits, any asset is allowed
 
 	// draw the funds
 	depositAmount := FloatToAmount(ta.Limit)
@@ -340,15 +345,18 @@ func AddFunds(payload *string) *string {
 	sdk.HiveDraw(mAmount, ta.Token)
 
 	if input.ToStake {
+		now := nowUnix()
 		member := stakingMember
 		member.Stake += depositAmount
-		member.LastActionAt = nowUnix()
+		member.LastActionAt = now
+		member.StakeIncrement++
 		saveMember(prj.ID, member)
+		// Append new stake history entry
+		saveStakeHistory(prj.ID, callerAddr, member.Stake, now, member.StakeIncrement)
 		prj.StakeTotal += depositAmount
 	} else {
-		// add to treasury for payouts
-		prj.Funds += depositAmount
-
+		// add to treasury for payouts (supports multi-asset)
+		addTreasuryFunds(prj.ID, ta.Token, depositAmount)
 	}
 
 	saveProjectFinance(prj)

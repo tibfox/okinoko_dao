@@ -1,9 +1,9 @@
 package main
 
 import (
-	"okinoko_dao/sdk"
 	"strconv"
-	"time"
+
+	"okinoko_dao/sdk"
 )
 
 // cachedEnv/cachedTransfer/cachedMembers are scoped to the currently executing transaction.
@@ -42,9 +42,6 @@ type TransferAllow struct {
 	Limit float64
 	Token sdk.Asset
 }
-
-// validAssets lists the supported asset types.
-var validAssets = []string{sdk.AssetHbd.String(), sdk.AssetHive.String()}
 
 // isValidAsset checks if a given token string is one of the supported assets.
 func isValidAsset(token string) bool {
@@ -88,34 +85,4 @@ func getFirstTransferAllow() *TransferAllow {
 // getSenderAddress returns the address of the current transaction sender.
 func getSenderAddress() sdk.Address {
 	return currentEnv().Sender.Address
-}
-
-// nowUnix returns the current Unix timestamp.
-// It prefers the chain's block timestamp from the environment if available.
-func nowUnix() int64 {
-	if ts := currentEnv().Timestamp; ts != "" {
-		if v, ok := parseTimestamp(ts); ok {
-			return v
-		}
-	}
-	if tsPtr := sdk.GetEnvKey("block.timestamp"); tsPtr != nil && *tsPtr != "" {
-		if v, ok := parseTimestamp(*tsPtr); ok {
-			return v
-		}
-	}
-	return time.Now().Unix()
-}
-
-// parseTimestamp accepts unix seconds or iso-ish strings since the env flips formats sometimes.
-func parseTimestamp(val string) (int64, bool) {
-	if v, err := strconv.ParseInt(val, 10, 64); err == nil {
-		return v, true
-	}
-	if t, err := time.Parse(time.RFC3339, val); err == nil {
-		return t.Unix(), true
-	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05", val, time.UTC); err == nil {
-		return t.Unix(), true
-	}
-	return 0, false
 }

@@ -98,17 +98,23 @@ func VoteProposal(payload *string) *string {
 	member := getMember(prj.ID, voterAddr)
 
 	prevVote := loadVoteRecord(input.ProposalID, voter)
+
 	// check if member joined after proposal
 	if member.JoinedAt > prpsl.CreatedAt {
 		sdk.Abort("proposal was created before joining the project")
 	}
 
-	// check if stakemin is still the same (it can get modified by proposals)
-	if FloatToAmount(prj.Config.StakeMinAmt) > member.Stake {
-		sdk.Abort("minimum stake has changed since membership - increase stake")
+	// Use historical stake from proposal creation time
+	// This prevents members from increasing stake after proposal creation to gain more voting power
+	weight := getStakeAtTime(prj.ID, voterAddr, prpsl.CreatedAt, member.StakeIncrement)
+	if weight == 0 {
+		sdk.Abort("no stake history found at proposal creation time")
 	}
 
-	weight := member.Stake
+	// check if stakemin is still valid (it can get modified by proposals)
+	if FloatToAmount(prj.Config.StakeMinAmt) > weight {
+		sdk.Abort("minimum stake requirement not met at proposal creation time")
+	}
 
 	// Load all options once to avoid repeated storage reads
 	optionCache := make(map[uint32]*ProposalOption)

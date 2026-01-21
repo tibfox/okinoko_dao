@@ -38,7 +38,10 @@ func CreateProposal(payload *string) *string {
 
 	isPoll := input.ForcePoll
 	if len(input.OptionsList) == 0 {
-		input.OptionsList = []string{"no", "yes"}
+		input.OptionsList = []ProposalOptionInput{
+			{Text: "no", URL: ""},
+			{Text: "yes", URL: ""},
+		}
 		if !input.ForcePoll {
 			isPoll = false
 		}
@@ -63,6 +66,12 @@ func CreateProposal(payload *string) *string {
 	// Count members / sum stakes from aggregates
 	memberSnap := uint(prj.MemberCount)
 	stakeSnap := prj.StakeTotal
+
+	// Prevent proposals when there are no stakes (stake-based voting would be meaningless)
+	if prj.Config.VotingSystem == VotingSystemStake && stakeSnap == 0 {
+		sdk.Abort("cannot create proposal with zero total stake in stake-based project")
+	}
+
 	txID := ""
 	if txPtr := sdk.GetEnvKey("tx.id"); txPtr != nil {
 		txID = *txPtr
@@ -112,11 +121,15 @@ func CreateProposal(payload *string) *string {
 	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
 		incrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
-	for i, txt := range input.OptionsList {
-		opt := ProposalOption{Text: txt}
+	for i, optInput := range input.OptionsList {
+		opt := ProposalOption{
+			Text: optInput.Text,
+			URL:  optInput.URL,
+		}
 		saveProposalOption(prpsl.ID, uint32(i), &opt)
 	}
 	setCount(ProposalsCount, id+1)
+
 	emitProposalCreatedEvent(prpsl, prj.ID, AddressToString(callerAddr), input.OptionsList)
 	emitProposalStateChangedEvent(id, ProposalActive)
 	result := strconv.FormatUint(id, 10)
@@ -194,6 +207,7 @@ func TallyProposal(proposalId *string) *string {
 	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
 		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
+
 	saveProposal(prpsl)
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	return strptr("tallied")
@@ -224,6 +238,15 @@ func ExecuteProposal(proposalID *string) *string {
 	if prpsl.State != ProposalPassed {
 		sdk.Abort(fmt.Sprintf("proposal is %s", prpsl.State))
 	}
+
+	// If proposal has ICC calls, only creator can execute
+	if prpsl.Outcome != nil && len(prpsl.Outcome.ICC) > 0 {
+		caller := getSenderAddress()
+		if caller != prpsl.Creator {
+			sdk.Abort("only proposal creator can execute proposals with inter-contract calls")
+		}
+	}
+
 	requiredReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
 	if prpsl.ExecutableAt > requiredReady {
 		requiredReady = prpsl.ExecutableAt
@@ -231,25 +254,33 @@ func ExecuteProposal(proposalID *string) *string {
 	if nowUnix() < requiredReady {
 		sdk.Abort(fmt.Sprintf("execution delay until %s", time.Unix(requiredReady, 0).UTC().Format(time.RFC3339)))
 	}
+
 	fundsTransferred := false
 	configChanged := false
 	stateChanged := false
 	metaChanged := false
 	if prpsl.Outcome != nil {
 		if prpsl.Outcome.Payout != nil {
-			// Calculate total and transfer in single loop
-			var totalAsked Amount
-			for _, amount := range prpsl.Outcome.Payout {
-				totalAsked += amount
-			}
-			if prj.Funds < totalAsked {
-				sdk.Abort("insufficient funds")
-			}
-			for addr, amount := range prpsl.Outcome.Payout {
-				mAmount := AmountToInt64(amount)
-				prj.Funds -= amount
-				sdk.HiveTransfer(addr, mAmount, prj.FundsAsset)
-				emitFundsRemoved(prj.ID, AddressToString(addr), AmountToFloat(amount), AssetToString(prj.FundsAsset), false)
+			// Transfer each payout with its specified asset
+			for addr, entry := range prpsl.Outcome.Payout {
+				asset := entry.Asset
+				// If no asset specified (legacy), use project's original asset
+				if asset.String() == "" {
+					asset = prj.FundsAsset
+				}
+				// Check treasury balance for this asset
+				treasuryBalance := getTreasuryBalance(prj.ID, asset)
+				if treasuryBalance < entry.Amount {
+					sdk.Abort(fmt.Sprintf("insufficient %s funds in treasury", AssetToString(asset)))
+				}
+				// Remove from treasury
+				if !removeTreasuryFunds(prj.ID, asset, entry.Amount) {
+					sdk.Abort(fmt.Sprintf("failed to remove %s from treasury", AssetToString(asset)))
+				}
+				// Transfer to recipient
+				mAmount := AmountToInt64(entry.Amount)
+				sdk.HiveTransfer(addr, mAmount, asset)
+				emitFundsRemoved(prj.ID, AddressToString(addr), AmountToFloat(entry.Amount), AssetToString(asset), false)
 				fundsTransferred = true
 			}
 		}
@@ -418,6 +449,45 @@ func ExecuteProposal(proposalID *string) *string {
 				}
 			}
 		}
+		if len(prpsl.Outcome.ICC) > 0 {
+			// Execute inter-contract calls
+			for _, icc := range prpsl.Outcome.ICC {
+				// Build intents for asset transfers
+				var opts *sdk.ContractCallOptions
+				if len(icc.Assets) > 0 {
+					intents := make([]sdk.Intent, 0, len(icc.Assets))
+					for asset, amount := range icc.Assets {
+						// Check treasury balance
+						treasuryBalance := getTreasuryBalance(prj.ID, asset)
+						if treasuryBalance < amount {
+							sdk.Abort(fmt.Sprintf("insufficient %s funds in treasury for ICC", AssetToString(asset)))
+						}
+						// Remove from treasury
+						if !removeTreasuryFunds(prj.ID, asset, amount) {
+							sdk.Abort(fmt.Sprintf("failed to remove %s from treasury for ICC", AssetToString(asset)))
+						}
+
+						// Create transfer intent
+						intents = append(intents, sdk.Intent{
+							Type: "transfer.allow",
+							Args: map[string]string{
+								"to":     icc.ContractAddress,
+								"tk":     AssetToString(asset),
+								"amount": fmt.Sprintf("%d", AmountToInt64(amount)),
+							},
+						})
+						fundsTransferred = true
+					}
+					opts = &sdk.ContractCallOptions{
+						Intents: intents,
+					}
+				}
+
+				// Execute the contract call
+				sdk.ContractCall(icc.ContractAddress, icc.Function, icc.Payload, opts)
+				emitProposalResultEvent(prj.ID, prpsl.ID, fmt.Sprintf("ICC executed: %s.%s", icc.ContractAddress, icc.Function))
+			}
+		}
 	}
 
 	prpsl.State = ProposalExecuted
@@ -494,6 +564,7 @@ func CancelProposal(payload *string) *string {
 	if refund {
 		refundAmount = FloatToAmount(prj.Config.ProposalCost)
 		if prj.Funds < refundAmount {
+			// Treasury has insufficient funds for refund - proposal cost remains with project
 			refund = false
 		} else {
 			prj.Funds -= refundAmount
@@ -507,10 +578,12 @@ func CancelProposal(payload *string) *string {
 	prpsl.State = ProposalCancelled
 	prpsl.ResultOptionID = -1
 	prpsl.ExecutableAt = 0
-	saveProposal(prpsl)
+
 	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
 		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
+
+	saveProposal(prpsl)
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	return strptr("cancelled")
 }
@@ -525,13 +598,16 @@ func percentageOf(value, percent float64) float64 {
 	return value * (percent / 100.0)
 }
 
-// allowsPauseMeta checks whether the meta payload only toggles pause state.
+// allowsPauseMeta checks whether the meta payload only toggles pause state or transfers ownership.
 func allowsPauseMeta(meta map[string]string) bool {
 	if meta == nil {
 		return false
 	}
 	if len(meta) == 1 {
 		if _, ok := meta["toggle_pause"]; ok {
+			return true
+		}
+		if _, ok := meta["update_owner"]; ok {
 			return true
 		}
 	}

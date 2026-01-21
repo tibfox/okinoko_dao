@@ -42,7 +42,7 @@ func decrementPayoutLock(projectID uint64, addr sdk.Address) {
 }
 
 // incrementPayoutLocks loops the payout map so each beneficiary gets a lock entry.
-func incrementPayoutLocks(projectID uint64, payout map[sdk.Address]Amount) {
+func incrementPayoutLocks(projectID uint64, payout map[sdk.Address]PayoutEntry) {
 	if payout == nil {
 		return
 	}
@@ -52,7 +52,7 @@ func incrementPayoutLocks(projectID uint64, payout map[sdk.Address]Amount) {
 }
 
 // decrementPayoutLocks removes all locks once a proposal outcome resolves.
-func decrementPayoutLocks(projectID uint64, payout map[sdk.Address]Amount) {
+func decrementPayoutLocks(projectID uint64, payout map[sdk.Address]PayoutEntry) {
 	if payout == nil {
 		return
 	}

@@ -6,8 +6,6 @@ import (
 	"okinoko_dao/sdk"
 )
 
-const AmountScale = 1000
-
 type Amount int64
 
 // FloatToAmount scales human floats by AmountScale and rounds to int64 so storage stays precise.
@@ -28,14 +26,6 @@ func AmountToInt64(v Amount) int64 {
 	return int64(v)
 }
 
-// VotingSystem defines the vote weighting model for a project.
-type VotingSystem uint8
-
-const (
-	VotingSystemDemocratic VotingSystem = 0
-	VotingSystemStake      VotingSystem = 1
-)
-
 // String serializes the VotingSystem enum into the short log-friendly codes.
 // Example payload: VotingSystemStake.String()
 func (vs VotingSystem) String() string {
@@ -48,19 +38,6 @@ func (vs VotingSystem) String() string {
 		return "0"
 	}
 }
-
-// ProposalState captures a proposal's lifecycle.
-type ProposalState uint8
-
-const (
-	ProposalStateUnspecified ProposalState = 0
-	ProposalActive           ProposalState = 1
-	ProposalClosed           ProposalState = 2
-	ProposalPassed           ProposalState = 3
-	ProposalExecuted         ProposalState = 4
-	ProposalFailed           ProposalState = 5
-	ProposalCancelled        ProposalState = 6
-)
 
 // String prints the proposal state as lower-case text for events and logs.
 // Example payload: ProposalPassed.String()
@@ -101,12 +78,13 @@ type ProjectConfig struct {
 }
 
 type Member struct {
-	Address       sdk.Address
-	Stake         Amount
-	JoinedAt      int64
-	LastActionAt  int64
-	ExitRequested int64
-	Reputation    int64
+	Address        sdk.Address
+	Stake          Amount
+	JoinedAt       int64
+	LastActionAt   int64
+	ExitRequested  int64
+	Reputation     int64
+	StakeIncrement uint64 // Counter incremented on each stake change
 }
 
 type Project struct {
@@ -138,21 +116,38 @@ type ProjectMeta struct {
 
 // ProjectFinance keeps track of treasury and aggregate staking data.
 type ProjectFinance struct {
-	Funds       Amount
-	FundsAsset  sdk.Asset
+	Funds       Amount    // Deprecated: kept for backwards compatibility, use Treasury instead
+	FundsAsset  sdk.Asset // Deprecated: kept for backwards compatibility
 	StakeTotal  Amount
 	MemberCount uint64
+	Treasury    map[sdk.Asset]Amount // Multi-asset treasury balances
 }
 
 type ProposalOption struct {
 	Text        string
+	URL         string
 	WeightTotal Amount
 	VoterCount  uint64
 }
 
+// PayoutEntry represents a single payout with asset specification
+type PayoutEntry struct {
+	Amount Amount
+	Asset  sdk.Asset
+}
+
+// InterContractCall represents a single inter-contract call with asset transfers
+type InterContractCall struct {
+	ContractAddress string            // Target contract address
+	Function        string            // Function/method to call
+	Payload         string            // JSON payload string for the function
+	Assets          map[sdk.Asset]Amount // Asset transfers to include (e.g., map[HIVE]1000, map[HBD]500)
+}
+
 type ProposalOutcome struct {
 	Meta   map[string]string
-	Payout map[sdk.Address]Amount
+	Payout map[sdk.Address]PayoutEntry
+	ICC    []InterContractCall // Inter-contract calls to execute
 }
 
 type Proposal struct {
@@ -184,11 +179,16 @@ type CreateProjectArgs struct {
 	URL           string
 }
 
+type ProposalOptionInput struct {
+	Text string
+	URL  string
+}
+
 type CreateProposalArgs struct {
 	ProjectID        uint64
 	Name             string
 	Description      string
-	OptionsList      []string
+	OptionsList      []ProposalOptionInput
 	ProposalOutcome  *ProposalOutcome
 	ProposalDuration uint64
 	Metadata         string

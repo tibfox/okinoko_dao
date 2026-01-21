@@ -145,6 +145,7 @@ func encodeMember(w *binWriter, m *Member) {
 	w.writeInt64(m.LastActionAt)
 	w.writeInt64(m.ExitRequested)
 	w.writeInt64(m.Reputation)
+	w.writeUint64(m.StakeIncrement)
 }
 
 // EncodeMember packs a Member into bytes so storage stays lean and no json noise leaks.
@@ -155,9 +156,10 @@ func EncodeMember(m *Member) []byte {
 	return w.bytes()
 }
 
-// encodeProposalOption captures text, cumulative weight and unique voter count.
+// encodeProposalOption captures text, URL, cumulative weight and unique voter count.
 func encodeProposalOption(w *binWriter, opt *ProposalOption) {
 	w.writeString(opt.Text)
+	w.writeString(opt.URL)
 	w.writeAmount(opt.WeightTotal)
 	w.writeUint64(opt.VoterCount)
 }
@@ -181,7 +183,32 @@ func encodeProposalOutcome(w *binWriter, out *ProposalOutcome) {
 		w.writeVarUint(uint64(len(addresses)))
 		for _, addrStr := range addresses {
 			w.writeString(addrStr)
-			w.writeAmount(out.Payout[AddressFromString(addrStr)])
+			entry := out.Payout[AddressFromString(addrStr)]
+			w.writeAmount(entry.Amount)
+			w.writeAsset(entry.Asset)
+		}
+	}
+	// Encode ICC calls
+	w.writeVarUint(uint64(len(out.ICC)))
+	for _, icc := range out.ICC {
+		w.writeString(icc.ContractAddress)
+		w.writeString(icc.Function)
+		w.writeString(icc.Payload)
+		// Encode assets map
+		if icc.Assets == nil {
+			w.writeVarUint(0)
+		} else {
+			// Sort assets for deterministic encoding
+			assetStrs := make([]string, 0, len(icc.Assets))
+			for asset := range icc.Assets {
+				assetStrs = append(assetStrs, AssetToString(asset))
+			}
+			sort.Strings(assetStrs)
+			w.writeVarUint(uint64(len(assetStrs)))
+			for _, assetStr := range assetStrs {
+				w.writeString(assetStr)
+				w.writeAmount(icc.Assets[AssetFromString(assetStr)])
+			}
 		}
 	}
 }
@@ -244,7 +271,7 @@ func EncodeCreateProjectArgs(args *CreateProjectArgs) []byte {
 }
 
 // EncodeCreateProposalArgs is used in tests/tools to mimic proposal_create payloads.
-// Example payload: EncodeCreateProposalArgs(&CreateProposalArgs{ProjectID:2, OptionsList: []string{"yes","no"}})
+// Example payload: EncodeCreateProposalArgs(&CreateProposalArgs{ProjectID:2, OptionsList: []ProposalOptionInput{{Text:"yes"},{Text:"no"}}})
 func EncodeCreateProposalArgs(args *CreateProposalArgs) []byte {
 	w := newWriter()
 	w.writeUint64(args.ProjectID)
@@ -252,7 +279,8 @@ func EncodeCreateProposalArgs(args *CreateProposalArgs) []byte {
 	w.writeString(args.Description)
 	w.writeVarUint(uint64(len(args.OptionsList)))
 	for _, opt := range args.OptionsList {
-		w.writeString(opt)
+		w.writeString(opt.Text)
+		w.writeString(opt.URL)
 	}
 	encodeProposalOutcome(w, args.ProposalOutcome)
 	w.writeUint64(args.ProposalDuration)
@@ -370,6 +398,14 @@ func (r *binReader) readAmount() (Amount, error) {
 		return 0, err
 	}
 	return Amount(val), nil
+}
+
+func (r *binReader) readAsset() (sdk.Asset, error) {
+	s, err := r.readString()
+	if err != nil {
+		return sdk.Asset(""), err
+	}
+	return AssetFromString(s), nil
 }
 
 // readString reads the varint length then slices out the utf8 chunk.
@@ -517,6 +553,12 @@ func decodeMember(r *binReader) (Member, error) {
 	if m.Reputation, err = r.readInt64(); err != nil {
 		return m, err
 	}
+	// Read StakeIncrement (backwards compatible - defaults to 0 if missing)
+	if r.pos < len(r.data) {
+		if m.StakeIncrement, err = r.readUint64(); err != nil {
+			return m, err
+		}
+	}
 	return m, nil
 }
 
@@ -531,11 +573,14 @@ func DecodeMember(data []byte) (*Member, error) {
 	return &m, nil
 }
 
-// decodeProposalOption reconstructs the text option plus running vote totals.
+// decodeProposalOption reconstructs the text option, URL, plus running vote totals.
 func decodeProposalOption(r *binReader) (ProposalOption, error) {
 	var opt ProposalOption
 	var err error
 	if opt.Text, err = r.readString(); err != nil {
+		return opt, err
+	}
+	if opt.URL, err = r.readString(); err != nil {
 		return opt, err
 	}
 	if opt.WeightTotal, err = r.readAmount(); err != nil {
@@ -583,7 +628,7 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	payouts := make(map[sdk.Address]Amount, count)
+	payouts := make(map[sdk.Address]PayoutEntry, count)
 	for i := uint64(0); i < count; i++ {
 		addr, err := r.readString()
 		if err != nil {
@@ -593,11 +638,69 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 		if err != nil {
 			return nil, err
 		}
-		payouts[AddressFromString(addr)] = value
+		asset, err := r.readAsset()
+		if err != nil {
+			return nil, err
+		}
+		payouts[AddressFromString(addr)] = PayoutEntry{Amount: value, Asset: asset}
 	}
+
+	// Decode ICC calls (backwards compatible - if missing, defaults to nil)
+	var iccCalls []InterContractCall
+	if r.pos < len(r.data) {
+		iccCount, err := r.readVarUint()
+		if err != nil {
+			return nil, err
+		}
+		if iccCount > 0 {
+			iccCalls = make([]InterContractCall, iccCount)
+			for i := uint64(0); i < iccCount; i++ {
+				contractAddr, err := r.readString()
+				if err != nil {
+					return nil, err
+				}
+				function, err := r.readString()
+				if err != nil {
+					return nil, err
+				}
+				payload, err := r.readString()
+				if err != nil {
+					return nil, err
+				}
+				// Decode assets map
+				assetCount, err := r.readVarUint()
+				if err != nil {
+					return nil, err
+				}
+				var assets map[sdk.Asset]Amount
+				if assetCount > 0 {
+					assets = make(map[sdk.Asset]Amount, assetCount)
+					for j := uint64(0); j < assetCount; j++ {
+						assetStr, err := r.readString()
+						if err != nil {
+							return nil, err
+						}
+						amount, err := r.readAmount()
+						if err != nil {
+							return nil, err
+						}
+						assets[AssetFromString(assetStr)] = amount
+					}
+				}
+				iccCalls[i] = InterContractCall{
+					ContractAddress: contractAddr,
+					Function:        function,
+					Payload:         payload,
+					Assets:          assets,
+				}
+			}
+		}
+	}
+
 	return &ProposalOutcome{
 		Meta:   meta,
 		Payout: payouts,
+		ICC:    iccCalls,
 	}, nil
 }
 
@@ -828,6 +931,27 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 			return nil, err
 		}
 	}
+	// Skip old voters list if present (backwards compatible)
+	if r.pos < len(r.data) {
+		voterCount, err := r.readVarUint()
+		if err != nil {
+			return nil, err
+		}
+		// Skip voter addresses
+		for i := uint64(0); i < voterCount; i++ {
+			_, err := r.readString()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Skip old total voted weight if present (backwards compatible)
+	if r.pos < len(r.data) {
+		_, err = r.readAmount()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return prpsl, nil
 }
 
@@ -876,9 +1000,12 @@ func DecodeCreateProposalArgs(data []byte) (*CreateProposalArgs, error) {
 	if err != nil {
 		return nil, err
 	}
-	args.OptionsList = make([]string, count)
+	args.OptionsList = make([]ProposalOptionInput, count)
 	for i := uint64(0); i < count; i++ {
-		if args.OptionsList[i], err = r.readString(); err != nil {
+		if args.OptionsList[i].Text, err = r.readString(); err != nil {
+			return nil, err
+		}
+		if args.OptionsList[i].URL, err = r.readString(); err != nil {
 			return nil, err
 		}
 	}
