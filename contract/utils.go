@@ -92,3 +92,19 @@ func parseTimestamp(val string) (int64, bool) {
 	}
 	return 0, false
 }
+
+// -----------------------------------------------------------------------------
+// Type Conversion Helpers
+// -----------------------------------------------------------------------------
+
+// AddressFromString converts a human string to the platform-specific address wrapper.
+func AddressFromString(s string) sdk.Address { return sdk.Address(s) }
+
+// AddressToString turns the wrapped type back into the underlying string.
+func AddressToString(a sdk.Address) string { return a.String() }
+
+// AssetFromString wraps a ticker string so type checking keeps us honest.
+func AssetFromString(s string) sdk.Asset { return sdk.Asset(s) }
+
+// AssetToString unwraps the ticker string for logs or SDK calls.
+func AssetToString(a sdk.Asset) string { return a.String() }

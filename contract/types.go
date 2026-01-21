@@ -6,7 +6,17 @@ import (
 	"okinoko_dao/sdk"
 )
 
+// -----------------------------------------------------------------------------
+// Core Types
+// -----------------------------------------------------------------------------
+
 type Amount int64
+
+// VotingSystem defines the vote weighting model for a project.
+type VotingSystem uint8
+
+// ProposalState captures a proposal's lifecycle.
+type ProposalState uint8
 
 // FloatToAmount scales human floats by AmountScale and rounds to int64 so storage stays precise.
 // Example payload: FloatToAmount(1.234)
@@ -205,19 +215,3 @@ type AddFundsArgs struct {
 	ProjectID uint64
 	ToStake   bool
 }
-
-// AddressFromString converts a human string to the platform-specific address wrapper.
-// Example payload: AddressFromString("hive:alice")
-func AddressFromString(s string) sdk.Address { return sdk.Address(s) }
-
-// AddressToString turns the wrapped type back into the underlying string.
-// Example payload: AddressToString(AddressFromString("hive:bob"))
-func AddressToString(a sdk.Address) string { return a.String() }
-
-// AssetFromString wraps a ticker string so type checking keeps us honest.
-// Example payload: AssetFromString("hive")
-func AssetFromString(s string) sdk.Asset { return sdk.Asset(s) }
-
-// AssetToString unwraps the ticker string for logs or SDK calls.
-// Example payload: AssetToString(AssetFromString("hbd"))
-func AssetToString(a sdk.Asset) string { return a.String() }

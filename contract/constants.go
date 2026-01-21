@@ -94,9 +94,6 @@ const (
 // Voting Systems
 // -----------------------------------------------------------------------------
 
-// VotingSystem defines the vote weighting model for a project.
-type VotingSystem uint8
-
 const (
 	VotingSystemDemocratic VotingSystem = 0
 	VotingSystemStake      VotingSystem = 1
@@ -105,9 +102,6 @@ const (
 // -----------------------------------------------------------------------------
 // Proposal States
 // -----------------------------------------------------------------------------
-
-// ProposalState captures a proposal's lifecycle.
-type ProposalState uint8
 
 const (
 	ProposalStateUnspecified ProposalState = 0
