@@ -82,6 +82,30 @@ func getFirstTransferAllow() *TransferAllow {
 	return nil
 }
 
+// getAllTransferAllows scans all intents and returns all valid transfer.allow intents.
+// Unlike getFirstTransferAllow, this does not cache and returns all matching intents.
+func getAllTransferAllows() []TransferAllow {
+	var transfers []TransferAllow
+	for _, intent := range currentIntents() {
+		if intent.Type == "transfer.allow" {
+			token := intent.Args["token"]
+			if !isValidAsset(token) {
+				sdk.Abort("invalid intent asset")
+			}
+			limitStr := intent.Args["limit"]
+			limit, err := strconv.ParseFloat(limitStr, 64)
+			if err != nil {
+				sdk.Abort("invalid intent limit")
+			}
+			transfers = append(transfers, TransferAllow{
+				Limit: limit,
+				Token: sdk.Asset(token),
+			})
+		}
+	}
+	return transfers
+}
+
 // getSenderAddress returns the address of the current transaction sender.
 func getSenderAddress() sdk.Address {
 	return currentEnv().Sender.Address

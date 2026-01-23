@@ -309,7 +309,9 @@ func checkNFTMembership(prj *Project, callerAddr sdk.Address) bool {
 	return editions != nil && *editions != "[]" && *editions != ""
 }
 
-// AddFunds handles the double-path deposit (treasury vs stake) and still validates asset + transfer.allow.
+// AddFunds handles deposits to treasury and/or stake with support for multiple assets.
+// If toStake is true, the project's main asset goes to stake, other assets go to treasury.
+// If toStake is false, all assets go to treasury.
 // Example payload: AddFunds(strptr("7|1"))
 //
 //go:wasmexport project_funds
@@ -318,49 +320,58 @@ func AddFunds(payload *string) *string {
 	prj := loadProject(input.ProjectID)
 	caller := getSenderAddress()
 	callerAddr := caller
-	var stakingMember *Member
 
-	// --- get first valid transfer intent ---
-	ta := getFirstTransferAllow()
-	if ta == nil {
+	// Get all valid transfer intents
+	transfers := getAllTransferAllows()
+	if len(transfers) == 0 {
 		sdk.Abort("no valid transfer intent provided")
 	}
 
+	// Pre-validate staking conditions if toStake is requested
+	var stakingMember *Member
 	if input.ToStake {
-		// For staking, we still require the original project asset (backwards compatibility)
-		if ta.Token != prj.FundsAsset {
-			sdk.Abort(fmt.Sprintf("staking requires %s", AssetToString(prj.FundsAsset)))
-		}
 		if prj.Config.VotingSystem == VotingSystemDemocratic {
 			sdk.Abort("cannot add member stake > StakeMinAmt in democratic systems")
 		}
 		member := getMember(prj.ID, callerAddr)
 		stakingMember = &member
 	}
-	// For treasury deposits, any asset is allowed
 
-	// draw the funds
-	depositAmount := FloatToAmount(ta.Limit)
-	mAmount := AmountToInt64(depositAmount)
-	sdk.HiveDraw(mAmount, ta.Token)
+	now := nowUnix()
+	stakeAdded := false
 
-	if input.ToStake {
-		now := nowUnix()
-		member := stakingMember
-		member.Stake += depositAmount
-		member.LastActionAt = now
-		member.StakeIncrement++
-		saveMember(prj.ID, member)
-		// Append new stake history entry
-		saveStakeHistory(prj.ID, callerAddr, member.Stake, now, member.StakeIncrement)
-		prj.StakeTotal += depositAmount
-	} else {
-		// add to treasury for payouts (supports multi-asset)
-		addTreasuryFunds(prj.ID, ta.Token, depositAmount)
+	// Process each transfer intent
+	for _, ta := range transfers {
+		depositAmount := FloatToAmount(ta.Limit)
+		mAmount := AmountToInt64(depositAmount)
+		sdk.HiveDraw(mAmount, ta.Token)
+
+		// Determine if this asset should go to stake or treasury
+		if input.ToStake && ta.Token == prj.FundsAsset {
+			// Main project asset goes to stake
+			member := stakingMember
+			member.Stake += depositAmount
+			member.LastActionAt = now
+			member.StakeIncrement++
+			saveMember(prj.ID, member)
+			saveStakeHistory(prj.ID, callerAddr, member.Stake, now, member.StakeIncrement)
+			prj.StakeTotal += depositAmount
+			stakeAdded = true
+			emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
+		} else {
+			// Other assets (or all if toStake is false) go to treasury
+			addTreasuryFunds(prj.ID, ta.Token, depositAmount)
+			emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), false)
+		}
 	}
 
 	saveProjectFinance(prj)
-	emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), input.ToStake)
+
+	if input.ToStake && stakeAdded {
+		return strptr("funds added to stake and treasury")
+	} else if input.ToStake {
+		return strptr("funds added to treasury (no stake asset provided)")
+	}
 	return strptr("funds added")
 }
 

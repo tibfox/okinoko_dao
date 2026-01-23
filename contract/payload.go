@@ -40,6 +40,9 @@ func decodeCreateProjectArgs(payload *string) *CreateProjectArgs {
 	cfg.ProposalCost = parseFloatField(get(8), "proposal cost")
 	cfg.StakeMinAmt = parseFloatField(get(9), "min stake")
 	if v := strings.TrimSpace(get(10)); v != "" {
+		if !contractExists(v) {
+			sdk.Abort(fmt.Sprintf("membership NFT contract not found: %s", v))
+		}
 		cfg.MembershipNFTContract = strptr(v)
 	}
 	if v := strings.TrimSpace(get(11)); v != "" {
@@ -299,7 +302,15 @@ func parseMetadataField(val string) map[string]string {
 		if len(split) != 2 {
 			sdk.Abort("invalid metadata entry (use key=value)")
 		}
-		meta[strings.TrimSpace(split[0])] = strings.TrimSpace(split[1])
+		key := strings.TrimSpace(split[0])
+		value := strings.TrimSpace(split[1])
+		// Validate contract existence for NFT contract updates
+		if key == "update_membershipNFTContract" && value != "" {
+			if !contractExists(value) {
+				sdk.Abort(fmt.Sprintf("membership NFT contract not found: %s", value))
+			}
+		}
+		meta[key] = value
 	}
 	return meta
 }
@@ -526,6 +537,9 @@ func parseICCField(val string) []InterContractCall {
 
 		if contractAddr == "" {
 			sdk.Abort("ICC contract address cannot be empty")
+		}
+		if !contractExists(contractAddr) {
+			sdk.Abort(fmt.Sprintf("ICC contract not found: %s", contractAddr))
 		}
 		if function == "" {
 			sdk.Abort("ICC function cannot be empty")

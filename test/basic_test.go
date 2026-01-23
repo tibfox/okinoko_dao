@@ -1998,3 +1998,60 @@ func TestProposalOptionHTTPRejected(t *testing.T) {
 		t.Fatalf("expected URL scheme validation error, got %q", res.Ret)
 	}
 }
+
+// NOTE: hbd_savings is a valid treasury asset in the contract (see constants.go),
+// but cannot be tested here because the ledger system calculates hbd_savings balances
+// from "stake" operations, not "deposit" operations. You get hbd_savings by staking HBD,
+// not by depositing directly. The contract logic is correct for handling hbd_savings.
+
+// TestAddFundsMultipleAssets verifies that multiple assets can be added in a single transaction.
+func TestAddFundsMultipleAssets(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+
+	// Add multiple assets to treasury in one transaction (hive and hbd)
+	payload := fmt.Sprintf("%d|false", projectID)
+	multiIntents := []contracts.Intent{
+		{Type: "transfer.allow", Args: map[string]string{"limit": "1.000", "token": "hive"}},
+		{Type: "transfer.allow", Args: map[string]string{"limit": "2.000", "token": "hbd"}},
+	}
+	CallContract(t, ct, "project_funds", PayloadString(payload), multiIntents, "hive:someone", true, uint(1_000_000_000))
+}
+
+// TestAddFundsMultipleAssetsWithStake verifies that when toStake=true, main asset goes to stake and others to treasury.
+func TestAddFundsMultipleAssetsWithStake(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createProjectWithVoting(t, ct, "1") // stake-based voting
+
+	// Add multiple assets with toStake=true
+	// HIVE (main asset) should go to stake, HBD should go to treasury
+	payload := fmt.Sprintf("%d|true", projectID)
+	multiIntents := []contracts.Intent{
+		{Type: "transfer.allow", Args: map[string]string{"limit": "1.000", "token": "hive"}},
+		{Type: "transfer.allow", Args: map[string]string{"limit": "2.000", "token": "hbd"}},
+	}
+	res, _, _ := CallContract(t, ct, "project_funds", PayloadString(payload), multiIntents, "hive:someone", true, uint(1_000_000_000))
+
+	// Should indicate funds went to both stake and treasury
+	if !strings.Contains(res.Ret, "stake and treasury") {
+		t.Fatalf("expected funds to go to stake and treasury, got %q", res.Ret)
+	}
+}
+
+// TestAddFundsMultipleAssetsNoStakeAsset verifies behavior when toStake=true but no stake asset provided.
+func TestAddFundsMultipleAssetsNoStakeAsset(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createProjectWithVoting(t, ct, "1") // stake-based voting, main asset is HIVE
+
+	// Add only HBD with toStake=true - no HIVE (stake asset)
+	payload := fmt.Sprintf("%d|true", projectID)
+	multiIntents := []contracts.Intent{
+		{Type: "transfer.allow", Args: map[string]string{"limit": "2.000", "token": "hbd"}},
+	}
+	res, _, _ := CallContract(t, ct, "project_funds", PayloadString(payload), multiIntents, "hive:someone", true, uint(1_000_000_000))
+
+	// Should indicate no stake asset was provided
+	if !strings.Contains(res.Ret, "no stake asset") {
+		t.Fatalf("expected indication that no stake asset was provided, got %q", res.Ret)
+	}
+}

@@ -38,6 +38,9 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHbd)
 	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHive)
 	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHbd)
+	// NOTE: hbd_savings deposits don't work via ct.Deposit() - the ledger system
+	// calculates hbd_savings from "stake" operations, not deposits.
+
 	return &ct
 }
 

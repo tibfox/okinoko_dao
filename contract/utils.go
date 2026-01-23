@@ -108,3 +108,14 @@ func AssetFromString(s string) sdk.Asset { return sdk.Asset(s) }
 
 // AssetToString unwraps the ticker string for logs or SDK calls.
 func AssetToString(a sdk.Asset) string { return a.String() }
+
+// -----------------------------------------------------------------------------
+// Contract Existence Helpers
+// -----------------------------------------------------------------------------
+
+// contractExists checks if a contract is registered by reading its state.
+// Returns true if the contract exists, false otherwise.
+func contractExists(contractId string) bool {
+	result := sdk.ContractStateGet(contractId, "a")
+	return result != nil
+}
