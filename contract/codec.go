@@ -222,7 +222,6 @@ func EncodeProject(prj *Project) []byte {
 	w.writeString(prj.Name)
 	w.writeString(prj.Description)
 	encodeProjectConfig(w, &prj.Config)
-	w.writeAmount(prj.Funds)
 	w.writeAsset(prj.FundsAsset)
 	w.writeBool(prj.Paused)
 	w.writeString(prj.Tx)
@@ -727,9 +726,6 @@ func DecodeProject(data []byte) (*Project, error) {
 	if prj.Config, err = decodeProjectConfig(r); err != nil {
 		return nil, err
 	}
-	if prj.Funds, err = r.readAmount(); err != nil {
-		return nil, err
-	}
 	if asset, err := r.readString(); err == nil {
 		prj.FundsAsset = AssetFromString(asset)
 	} else {
@@ -826,10 +822,9 @@ func DecodeProjectMeta(data []byte) (*ProjectMeta, error) {
 }
 
 // EncodeProjectFinance handles the frequently updated treasury counters separately.
-// Example payload: EncodeProjectFinance(&ProjectFinance{Funds:FloatToAmount(10), MemberCount:3})
+// Example payload: EncodeProjectFinance(&ProjectFinance{MemberCount:3})
 func EncodeProjectFinance(fin *ProjectFinance) []byte {
 	w := newWriter()
-	w.writeAmount(fin.Funds)
 	w.writeAsset(fin.FundsAsset)
 	w.writeAmount(fin.StakeTotal)
 	w.writeUint64(fin.MemberCount)
@@ -842,9 +837,6 @@ func DecodeProjectFinance(data []byte) (*ProjectFinance, error) {
 	r := newReader(data)
 	var fin ProjectFinance
 	var err error
-	if fin.Funds, err = r.readAmount(); err != nil {
-		return nil, err
-	}
 	if asset, err := r.readString(); err == nil {
 		fin.FundsAsset = AssetFromString(asset)
 	} else {

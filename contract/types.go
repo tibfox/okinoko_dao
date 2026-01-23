@@ -104,8 +104,7 @@ type Project struct {
 	Description string
 	Config      ProjectConfig
 	URL         string
-	Funds       Amount
-	FundsAsset  sdk.Asset
+	FundsAsset  sdk.Asset // Main project asset (used for staking)
 	Paused      bool
 	Tx          string
 	Metadata    string
@@ -126,8 +125,7 @@ type ProjectMeta struct {
 
 // ProjectFinance keeps track of treasury and aggregate staking data.
 type ProjectFinance struct {
-	Funds       Amount    // Deprecated: kept for backwards compatibility, use Treasury instead
-	FundsAsset  sdk.Asset // Deprecated: kept for backwards compatibility
+	FundsAsset  sdk.Asset            // Main project asset (used for staking)
 	StakeTotal  Amount
 	MemberCount uint64
 	Treasury    map[sdk.Asset]Amount // Multi-asset treasury balances

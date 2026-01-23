@@ -177,7 +177,7 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 |-----------------|---------|-------------|--------|
 | `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?` | Creates a new project with multi-asset treasury support. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
 | `project_join` | `projectId` | Joins a project using the caller's first `transfer.allow` intent. Aborts if paused or the caller fails NFT membership checks. | `"joined"` |
-| `project_leave` | `projectId` | Starts/finishes the leave cooldown. Blocks when payouts targeting the member are still active. | `"exit requested"` / `"exit finished"` |
+| `project_leave` | `projectId` | Starts/finishes the leave cooldown. Blocks when payouts targeting the member are still active. **Owners must transfer ownership before leaving.** | `"exit requested"` / `"exit finished"` |
 | `project_funds` | `projectId\|toStakeFlag` | Adds funds either to the treasury (`false`, accepts any asset) or increases the caller's stake (`true`, requires base membership asset, stake systems only). | `"funds added"` |
 | `project_transfer` | `projectId\|newOwner` | Owner-only direct transfer of ownership to an existing member. | `"ownership transferred"` |
 | `project_pause` | `projectId\|true/false` | Owner-only immediate pause/unpause. Paused mode blocks new proposals/execution except meta proposals that only toggle pause. | `"paused"` / `"unpaused"` |
@@ -294,6 +294,7 @@ Yes;No###https://docs.example.com/why-not;Abstain
 - All votes and results are public and stored on-chain.
 - The project owner can hand over control to another member via a special transfer function.
 - The DAO can also hand over full owner control via a proposal even if the project is currently paused
+- **Owners cannot leave** the project until they transfer ownership to another member, ensuring the DAO always has an owner
 - Vote weights are determined by your stake at the time each proposal was created, preventing vote manipulation
 ---
 
@@ -563,6 +564,7 @@ proposal_create
 
 **Validation Rules:**
 
+- **Contract existence**: Target contracts are validated to exist before proposal creation
 - Each asset can only be specified once per ICC
 - Asset amounts must be positive
 - Contract address and function name cannot be empty
@@ -590,8 +592,9 @@ pr|pId:1|prId:5|r:ICC executed: contract:dex.swap
 ### 11.1 Access Control
 - **Membership Verification**: All sensitive operations verify membership status
 - **Owner-Only Operations**: Emergency pause, direct whitelist management, ownership transfer
+- **Owner Persistence**: Owners must transfer ownership before leaving, ensuring DAOs always have an owner
 - **Creator Permissions**: Proposal cancellation rights, ICC proposal execution (creator-only)
-- **NFT Gating**: Optional NFT ownership verification for membership
+- **NFT Gating**: Optional NFT ownership verification for membership (NFT contracts are validated to exist)
 - **ICC Execution Control**: Proposals with inter-contract calls can only be executed by their creator
 
 ### 11.2 Economic Security

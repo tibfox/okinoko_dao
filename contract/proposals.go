@@ -112,8 +112,7 @@ func CreateProposal(payload *string) *string {
 		}
 		mAmount := AmountToInt64(costAmount)
 		sdk.HiveDraw(mAmount, ta.Token)
-		prj.Funds += costAmount
-		saveProjectFinance(prj)
+		addTreasuryFunds(prj.ID, ta.Token, costAmount)
 		emitFundsAdded(prj.ID, callerStr, AmountToFloat(costAmount), ta.Token.String(), false)
 	}
 
@@ -563,12 +562,12 @@ func CancelProposal(payload *string) *string {
 	var refundAmount Amount
 	if refund {
 		refundAmount = FloatToAmount(prj.Config.ProposalCost)
-		if prj.Funds < refundAmount {
+		treasuryBalance := getTreasuryBalance(prj.ID, prj.FundsAsset)
+		if treasuryBalance < refundAmount {
 			// Treasury has insufficient funds for refund - proposal cost remains with project
 			refund = false
 		} else {
-			prj.Funds -= refundAmount
-			saveProjectFinance(prj)
+			removeTreasuryFunds(prj.ID, prj.FundsAsset, refundAmount)
 			mAmount := AmountToInt64(refundAmount)
 			sdk.HiveTransfer(prpsl.Creator, mAmount, prj.FundsAsset)
 			emitFundsRemoved(prj.ID, AddressToString(prpsl.Creator), AmountToFloat(refundAmount), AssetToString(prj.FundsAsset), false)

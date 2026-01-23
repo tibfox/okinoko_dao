@@ -1173,6 +1173,16 @@ func TestLeaveProjectNotMember(t *testing.T) {
 	}
 }
 
+// TestLeaveProjectOwnerMustTransferFirst tests that owner cannot leave without transferring ownership.
+func TestLeaveProjectOwnerMustTransferFirst(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+	res, _, _ := CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "owner must transfer ownership") {
+		t.Fatalf("expected owner leave rejection, got %q", res.Ret)
+	}
+}
+
 // TestTransferOwnershipNotOwner tests that only owner can transfer ownership.
 func TestTransferOwnershipNotOwner(t *testing.T) {
 	ct := SetupContractTest()
@@ -1423,25 +1433,33 @@ func TestStakeHistoryCleanupOnLeave(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createProjectWithVoting(t, ct, "1") // Use stake-based project
 
+	// Another member joins (not the owner)
+	joinProjectMember(t, ct, projectID, "hive:someoneelse")
+
 	// Member increases stake multiple times to create history
 	payload := fmt.Sprintf("%d|true", projectID)
-	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
-	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.500"), "hive:someone", true, uint(1_000_000_000))
-	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("2.000"), "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
+	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.500"), "hive:someoneelse", true, uint(1_000_000_000))
+	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("2.000"), "hive:someoneelse", true, uint(1_000_000_000))
 
-	// Member leaves (should delete all stake history)
-	CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someone", true, uint(1_000_000_000))
+	// Member leaves (should delete all stake history) - request exit
+	CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000))
 
-	// Wait for cooldown to complete
-	CallContractAt(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	// Wait for cooldown to complete and finalize exit
+	CallContractAt(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 
 	// If member rejoins, they should start fresh with increment 0
-	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T01:00:00")
 
-	// Should be able to create proposals and vote without issues
-	proposalID := createSimpleProposal(t, ct, projectID, "1")
+	// Create proposal AFTER rejoining so member can vote
+	fields := simpleProposalFields(projectID, "1")
+	proposalPayload := strings.Join(fields, "|")
+	propRes, _, _ := CallContractAt(t, ct, "proposal_create", PayloadString(proposalPayload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000), "2025-09-05T02:00:00")
+	proposalID := parseCreatedID(t, propRes.Ret, "proposal")
+
+	// Should be able to vote without issues
 	votePayload := PayloadString(fmt.Sprintf("%d|1", proposalID))
-	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
+	CallContractAt(t, ct, "proposals_vote", votePayload, nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T02:00:00")
 }
 
 // TestVoteWithNoStakeHistory tests voting fails if no stake history exists (shouldn't happen).
@@ -2054,4 +2072,105 @@ func TestAddFundsMultipleAssetsNoStakeAsset(t *testing.T) {
 	if !strings.Contains(res.Ret, "no stake asset") {
 		t.Fatalf("expected indication that no stake asset was provided, got %q", res.Ret)
 	}
+}
+
+// TestDemocraticHBDPayoutExactAmount tests that a democratic project
+// can create and execute a proposal that pays out the exact treasury amount in HBD.
+func TestDemocraticHBDPayoutExactAmount(t *testing.T) {
+	ct := SetupContractTest()
+
+	// Create democratic project with HIVE as main asset (simpler setup)
+	// Fields: name|desc|voting|threshold|quorum|duration|execDelay|leaveCooldown|proposalCost|stakeMin|...
+	projectPayload := "test-dao|test dao|0|50.001|50.001|1|0|10|0|1|||||1||"
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(projectPayload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	projectID, _ := strconv.ParseUint(res.Ret, 10, 64)
+
+	// Join with second member
+	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
+
+	// Add exactly 1.201 HBD to treasury
+	fundsPayload := fmt.Sprintf("%d|false", projectID)
+	multiIntents := []contracts.Intent{
+		{Type: "transfer.allow", Args: map[string]string{"limit": "1.201", "token": "hbd"}},
+	}
+	CallContract(t, ct, "project_funds", PayloadString(fundsPayload), multiIntents, "hive:someone", true, uint(1_000_000_000))
+
+	// Create proposal to payout exactly 1.201 HBD
+	// Fields: projectId|name|desc|duration|options|forcePoll|payout|meta|url|icc
+	proposalPayload := fmt.Sprintf("%d|payout test|desc|1||0|hive:tibfox:1.201:hbd||", projectID)
+	propRes, _, _ := CallContract(t, ct, "proposal_create", PayloadString(proposalPayload), nil, "hive:someone", true, uint(1_000_000_000))
+	proposalID := propRes.Ret
+
+	// Both members vote yes
+	CallContract(t, ct, "proposals_vote", PayloadString(proposalID+"|1"), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposals_vote", PayloadString(proposalID+"|1"), nil, "hive:someoneelse", true, uint(1_000_000_000))
+
+	// Tally after voting period
+	CallContractAt(t, ct, "proposal_tally", PayloadString(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+
+	// Execute the proposal - should succeed and transfer exactly 1.201 HBD
+	execRes, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T01:00:00")
+	if !strings.Contains(execRes.Ret, "executed") {
+		t.Fatalf("expected proposal to execute successfully, got %q", execRes.Ret)
+	}
+}
+
+// TestDemocraticPayoutThenMembersLeave tests that after a payout, members can leave
+// and the DAO ends up with only the creator's stake.
+func TestDemocraticPayoutThenMembersLeave(t *testing.T) {
+	ct := SetupContractTest()
+
+	// Create democratic project with 0.05 HIVE as membership stake
+	// Fields: name|desc|voting|threshold|quorum|duration|execDelay|leaveCooldown|proposalCost|stakeMin|...
+	// leaveCooldown=0 for easier testing
+	projectPayload := "test-dao|test dao|0|50.001|50.001|1|0|0|0|0.05|||||1||"
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(projectPayload), transferIntent("0.050"), "hive:someone", true, uint(1_000_000_000))
+	projectID, _ := strconv.ParseUint(res.Ret, 10, 64)
+
+	// Join with second and third members (each with 0.05 HIVE)
+	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("0.050"), "hive:someoneelse", true, uint(1_000_000_000))
+	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("0.050"), "hive:member2", true, uint(1_000_000_000))
+
+	// Add exactly 1.201 HBD to treasury
+	fundsPayload := fmt.Sprintf("%d|false", projectID)
+	hbdIntents := []contracts.Intent{
+		{Type: "transfer.allow", Args: map[string]string{"limit": "1.201", "token": "hbd"}},
+	}
+	CallContract(t, ct, "project_funds", PayloadString(fundsPayload), hbdIntents, "hive:someone", true, uint(1_000_000_000))
+
+	// Create proposal to payout exactly 1.201 HBD to outsider
+	proposalPayload := fmt.Sprintf("%d|payout test|desc|1||0|hive:outsider:1.201:hbd||", projectID)
+	propRes, _, _ := CallContract(t, ct, "proposal_create", PayloadString(proposalPayload), nil, "hive:someone", true, uint(1_000_000_000))
+	proposalID := propRes.Ret
+
+	// All members vote yes
+	CallContract(t, ct, "proposals_vote", PayloadString(proposalID+"|1"), nil, "hive:someone", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposals_vote", PayloadString(proposalID+"|1"), nil, "hive:someoneelse", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposals_vote", PayloadString(proposalID+"|1"), nil, "hive:member2", true, uint(1_000_000_000))
+
+	// Tally and execute
+	CallContractAt(t, ct, "proposal_tally", PayloadString(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
+	CallContractAt(t, ct, "proposal_execute", PayloadString(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T01:00:00")
+
+	// Non-owner members leave (first request, then finalize after cooldown)
+	// Cooldown is 24 hours minimum, so we need to advance time
+	leavePayload := PayloadString(strconv.FormatUint(projectID, 10))
+
+	// Request exit for non-owner members
+	CallContractAt(t, ct, "project_leave", leavePayload, nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T02:00:00")
+	CallContractAt(t, ct, "project_leave", leavePayload, nil, "hive:member2", true, uint(1_000_000_000), "2025-09-05T02:00:00")
+
+	// Owner/creator tries to leave - should FAIL immediately
+	leaveRes, _, _ := CallContractAt(t, ct, "project_leave", leavePayload, nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T02:00:00")
+	if !strings.Contains(leaveRes.Ret, "owner must transfer ownership") {
+		t.Fatalf("expected owner leave rejection, got %q", res.Ret)
+	}
+
+	// Finalize exits for non-owner members after 24+ hours
+	CallContractAt(t, ct, "project_leave", leavePayload, nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-06T03:00:00")
+	CallContractAt(t, ct, "project_leave", leavePayload, nil, "hive:member2", true, uint(1_000_000_000), "2025-09-06T03:00:00")
+
+	// At this point, the DAO should have:
+	// - 0.05 HIVE stake (only owner remains, cannot leave)
+	// - 0 HBD treasury (paid out)
 }

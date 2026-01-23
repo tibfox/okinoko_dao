@@ -63,7 +63,6 @@ func CreateProject(payload *string) *string {
 		Description: input.Description,
 		URL:         input.URL,
 		Metadata:    input.Metadata,
-		Funds:       treasuryAmount,
 		FundsAsset:  ta.Token,
 		Paused:      false,
 		Tx:          txID,
@@ -238,6 +237,11 @@ func LeaveProject(projectID *string) *string {
 	}
 
 	member := getMember(prj.ID, callerAddr)
+
+	// Owner must transfer ownership before leaving
+	if callerAddr == prj.Owner {
+		sdk.Abort("owner must transfer ownership before leaving")
+	}
 
 	now := nowUnix()
 	if hasActivePayout(prj.ID, callerAddr) {
@@ -480,7 +484,6 @@ func loadProject(id uint64) *Project {
 		URL:         meta.URL,
 		Config:      *cfg,
 		Metadata:    meta.Metadata,
-		Funds:       fin.Funds,
 		FundsAsset:  fin.FundsAsset,
 		Paused:      meta.Paused,
 		Tx:          meta.Tx,
@@ -536,7 +539,6 @@ func loadProjectConfig(id uint64) *ProjectConfig {
 
 func saveProjectFinance(prj *Project) {
 	fin := ProjectFinance{
-		Funds:       prj.Funds,
 		FundsAsset:  prj.FundsAsset,
 		StakeTotal:  prj.StakeTotal,
 		MemberCount: prj.MemberCount,
