@@ -25,6 +25,10 @@ const AmountScale = 1000
 // -----------------------------------------------------------------------------
 
 const (
+	// MaxNameLength limits the size of project and proposal names.
+	MaxNameLength = 128
+	// MaxDescriptionLength limits the size of project and proposal descriptions.
+	MaxDescriptionLength = 512
 	// MaxOptionTextLength limits the size of proposal option text.
 	MaxOptionTextLength = 500
 	// MaxURLLength limits the size of URLs (for projects, proposals, and options).

@@ -44,6 +44,7 @@ graph TD
     Join --> Member[Become Member]
     Propose --> YesNo[Yes/No with Actions]
     Propose --> Poll[Polls]
+    Propose --> ICC[Inter-Contract Calls]
     Vote --> Change[Can Change Vote]
     Fund --> ToTreasury[To Treasury]
     Fund --> ToStake[To Stake]
@@ -54,6 +55,7 @@ graph TD
     style Propose fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
     style Vote fill:#fce4ec,stroke:#e91e63,stroke-width:2px
     style Fund fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
+    style ICC fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
 ```
 
 - **Create a Project**  
@@ -75,7 +77,7 @@ graph TD
 - **Make a Proposal**
   Suggest an action or ask the community a question.
   Proposal types:
-  - **Yes/No** (can also execute fund transfers or project meta changes if approved)
+  - **Yes/No** (can also execute fund transfers, project meta changes, or inter-contract calls if approved)
   - **Single Choice Poll**
   - **Multiple Choice Poll**
 
@@ -86,6 +88,7 @@ graph TD
   - Receiver (only for Yes/No fund transfers)
   - Cost (defined by the project, goes into treasury)
   - Project meta keys to update
+  - Inter-contract calls (ICC) to execute actions on other smart contracts
 
 - **Vote on Proposals**  
   Members vote according to the project’s rules. Votes can be changed until the proposal gets tallied. Tallying and execution are explicit calls (`proposal_tally`, `proposal_execute`) and can be managed through [okinoko.io](https://okinoko.io).
@@ -148,7 +151,7 @@ stateDiagram-v2
     Tallied --> Cancelled: Cancelled
 
     Passed --> Executed: proposal_execute<br/>(after delay)
-    Executed --> [*]: Funds Sent /<br/>Meta Updated
+    Executed --> [*]: Funds Sent /<br/>Meta Updated /<br/>ICC Executed
     Failed --> [*]
     Cancelled --> [*]
 
@@ -159,8 +162,8 @@ stateDiagram-v2
 ```
 
 When voting ends (and someone calls `proposal_tally`):
-- If **Yes/No** and passes → Funds are sent (if applicable) and/or project meta settings are changed.  
-- If a poll → Results are recorded on-chain for everyone to see.  
+- If **Yes/No** and passes → Funds are sent (if applicable), project meta settings are changed, and/or inter-contract calls are executed.
+- If a poll → Results are recorded on-chain for everyone to see.
 - The project treasury is updated automatically if funds leave the project.
 
 After tallying, anyone can call `proposal_execute` once the configured execution delay has elapsed. Passed proposals remain pending until execution (or cancellation) succeeds.
@@ -175,13 +178,13 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 
 | Action / Export | Payload | Description | Return |
 |-----------------|---------|-------------|--------|
-| `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?` | Creates a new project with multi-asset treasury support. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
+| `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?` | Creates a new project with multi-asset treasury support. Name max 128 chars, description max 512 chars. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
 | `project_join` | `projectId` | Joins a project using the caller's first `transfer.allow` intent. Aborts if paused or the caller fails NFT membership checks. | `"joined"` |
 | `project_leave` | `projectId` | Starts/finishes the leave cooldown. Blocks when payouts targeting the member are still active. **Owners must transfer ownership before leaving.** | `"exit requested"` / `"exit finished"` |
 | `project_funds` | `projectId\|toStakeFlag` | Adds funds either to the treasury (`false`, accepts any asset) or increases the caller's stake (`true`, requires base membership asset, stake systems only). | `"funds added"` |
 | `project_transfer` | `projectId\|newOwner` | Owner-only direct transfer of ownership to an existing member. | `"ownership transferred"` |
 | `project_pause` | `projectId\|true/false` | Owner-only immediate pause/unpause. Paused mode blocks new proposals/execution except meta proposals that only toggle pause. | `"paused"` / `"unpaused"` |
-| `proposal_create` | `projectId\|name\|description\|duration\|options?\|forcePoll?\|payouts?\|meta?\|metadata?\|proposalUrl?\|icc?` | Creates a proposal. `options` format: `text;text;text` or `text###url;text###url` where each option can optionally include a reference URL separated by `###`. Options are semicolon-separated. Max 500 chars per option text and URL. Only HTTPS URLs accepted. `payouts` supports multi-asset format: `member:amount:asset;member:amount:asset` (e.g., `hive:alice:1.5:hbd;hive:bob:2.0:hive`). Legacy format `member:amount` defaults to project's base asset. `meta` is a `key=value;key=value` string and can update project config. `icc` defines inter-contract calls (see section 10.6). Cost is debited automatically. | ID of the proposal |
+| `proposal_create` | `projectId\|name\|description\|duration\|options?\|forcePoll?\|payouts?\|meta?\|metadata?\|proposalUrl?\|icc?` | Creates a proposal. Name max 128 chars, description max 512 chars. `options` format: `text;text;text` or `text###url;text###url` where each option can optionally include a reference URL separated by `###`. Options are semicolon-separated. Max 500 chars per option text and URL. Only HTTPS URLs accepted. `payouts` format: `addr:amount:asset;addr:amount:asset` (e.g., `hive:alice:1.5:hbd;hive:bob:2.0:hive`). Asset is required for each payout. `meta` is a `key=value;key=value` string and can update project config. `icc` defines inter-contract calls (see section 10.6). Cost is debited automatically. | ID of the proposal |
 | `proposals_vote` | `proposalId\|choices` | Casts or updates votes for a proposal. Weight comes from stake. Choices can be comma or semicolon separated indices. | `"voted"` |
 | `proposal_tally` | `proposalId` | Closes voting after duration. Sets proposal to `passed`, `closed`, `failed`, or `cancelled`. | `"tallied"` |
 | `proposal_execute` | `proposalId` | Executes passed proposals after the execution delay. Handles treasury payouts, meta updates, and inter-contract calls. **ICC proposals can only be executed by their creator.** | `"executed"` |
@@ -255,9 +258,13 @@ Yes;No###https://docs.example.com/why-not;Abstain
 
 ### Validation Rules
 
-- **Option text**: Maximum 500 characters
+- **Name**: Maximum 128 characters (projects and proposals)
+- **Description**: Maximum 512 characters (projects and proposals)
+- **Options**: Minimum 2 options required when custom options are provided (empty defaults to yes/no)
+- **Option text**: Maximum 500 characters, cannot be empty
 - **Option URL**: Maximum 500 characters
-- **Option text**: Cannot be empty
+- **Payout assets**: Must be `hive`, `hbd`, or `hbd_savings` (case-insensitive)
+- **Asset names**: Case-insensitive (`HIVE`, `Hive`, `hive` all work)
 - **URLs**: Optional for each option
 - **URL schemes**: Only `https://` is allowed (prevents XSS/injection attacks and enforces secure connections)
 - **Format**: Text and URL are separated by `###` delimiter
@@ -408,11 +415,11 @@ Now the DAO has adjusted its governance parameters and paid out Bob's request. U
 Projects support multi-asset treasuries, allowing communities to manage multiple token types simultaneously:
 
 **Key Features:**
-- **Multiple Assets**: Treasury can hold HIVE, HBD, and any other supported assets in separate balances
+- **Multiple Assets**: Treasury can hold HIVE, HBD, and HBD_SAVINGS in separate balances
 - **Per-Asset Tracking**: Each asset balance is tracked independently using dedicated state keys
 - **Flexible Payouts**: Proposals can specify which asset to pay out for each recipient
 - **Mixed Payouts**: A single proposal can pay different members in different assets
-- **Backwards Compatible**: Legacy payout format (`addr:amount`) defaults to the project's base membership asset
+- **Asset Required**: Payout format requires explicit asset specification (`addr:amount:asset`)
 
 **Adding Funds to Treasury:**
 ```
@@ -425,22 +432,15 @@ transfer.allow: { limit: "10.000", token: "hbd" }
 
 **Creating Multi-Asset Payouts:**
 
-New format (explicit asset):
 ```
 proposal_create
 <projectId>|Title|Description|24||0|hive:alice:5.0:hbd;hive:bob:3.0:hive|||
 ```
 
-Legacy format (defaults to base asset):
-```
-proposal_create
-<projectId>|Title|Description|24||0|hive:alice:5.0|||
-```
-
 **Payout Format Syntax:**
-- **New format**: `address:amount:asset` - Explicitly specifies the asset
-- **Legacy format**: `address:amount` - Defaults to project's base membership asset (FundsAsset)
+- **Format**: `address:amount:asset` - Asset is required for each payout
 - **Multiple recipients**: Separate entries with semicolons (`;`)
+- **Supported assets**: `hive`, `hbd`, `hbd_savings`
 
 **Examples:**
 
@@ -452,11 +452,6 @@ hive:alice:10.5:hbd
 Multi-asset payout (mixed):
 ```
 hive:alice:5.0:hive;hive:bob:3.5:hbd;hive:carol:2.0:hive
-```
-
-Legacy format (defaults to HIVE if that's the project's base asset):
-```
-hive:alice:10.5
 ```
 
 **Important Notes:**
@@ -565,6 +560,7 @@ proposal_create
 **Validation Rules:**
 
 - **Contract existence**: Target contracts are validated to exist before proposal creation
+- **Supported assets**: Only `hive`, `hbd`, `hbd_savings` allowed (case-insensitive)
 - Each asset can only be specified once per ICC
 - Asset amounts must be positive
 - Contract address and function name cannot be empty

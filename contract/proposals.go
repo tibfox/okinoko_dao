@@ -45,8 +45,13 @@ func CreateProposal(payload *string) *string {
 		if !input.ForcePoll {
 			isPoll = false
 		}
-	} else if !input.ForcePoll {
-		isPoll = true
+	} else {
+		if len(input.OptionsList) < 2 {
+			sdk.Abort("proposals require at least 2 options")
+		}
+		if !input.ForcePoll {
+			isPoll = true
+		}
 	}
 
 	id := getCount(ProposalsCount)
@@ -263,10 +268,6 @@ func ExecuteProposal(proposalID *string) *string {
 			// Transfer each payout with its specified asset
 			for addr, entry := range prpsl.Outcome.Payout {
 				asset := entry.Asset
-				// If no asset specified (legacy), use project's original asset
-				if asset.String() == "" {
-					asset = prj.FundsAsset
-				}
 				// Check treasury balance for this asset
 				treasuryBalance := getTreasuryBalance(prj.ID, asset)
 				if treasuryBalance < entry.Amount {

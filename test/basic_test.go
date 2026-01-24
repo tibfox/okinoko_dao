@@ -28,7 +28,7 @@ func TestCreateProject(t *testing.T) {
 		"24",                 // duration
 		"",                   // options -> default yes/no
 		"0",                  // is poll
-		"hive:someoneelse:1", // payouts
+		"hive:someoneelse:1:hive", // payouts
 		"",                   // outcome meta
 		"asd",                // metadata
 	}
@@ -75,7 +75,7 @@ func TestProposalLifecycle(t *testing.T) {
 		"1",
 		"",
 		"0",
-		"hive:someoneelse:0.200",  // Payout 0.200 HIVE to someoneelse
+		"hive:someoneelse:0.200:hive",  // Payout 0.200 HIVE to someoneelse
 		"",
 		"",
 	}
@@ -680,7 +680,7 @@ func TestProjectLeaveBlockedDuringPayoutProposal(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	addTreasuryFunds(t, ct, projectID, "0.500")
-	proposalID := createPollProposal(t, ct, projectID, "24", "hive:someoneelse:0.500", "")
+	proposalID := createPollProposal(t, ct, projectID, "24", "hive:someoneelse:0.500:hive", "")
 	voteForProposal(t, ct, proposalID, "hive:someone")
 	idStr := strconv.FormatUint(projectID, 10)
 	res, _, _ := CallContract(t, ct, "project_leave", PayloadString(idStr), nil, "hive:someoneelse", false, uint(1_000_000_000))
@@ -749,7 +749,7 @@ func TestProposalExecuteTransfersFunds2Members(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	addTreasuryFunds(t, ct, projectID, "0.600")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500:hive", "")
 	votePayload := PayloadString(fmt.Sprintf("%d|1", proposalID))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someoneelse", true, uint(1_000_000_000))
@@ -764,7 +764,7 @@ func TestProposalExecuteTransfersFunds3Members(t *testing.T) {
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	joinProjectMember(t, ct, projectID, "hive:member2")
 	addTreasuryFunds(t, ct, projectID, "0.600")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500:hive", "")
 	votePayload := PayloadString(fmt.Sprintf("%d|1", proposalID))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:member2", true, uint(1_000_000_000))
@@ -777,7 +777,7 @@ func TestProposalExecuteRequiresPassed(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
 	addTreasuryFunds(t, ct, projectID, "0.400")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200:hive", "")
 	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
 	if !strings.Contains(res.Ret, "proposal is") {
 		t.Fatalf("expected execute rejection for active proposal, got %q", res.Ret)
@@ -791,7 +791,7 @@ func TestProposalExecuteInsufficientFunds(t *testing.T) {
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	joinProjectMember(t, ct, projectID, "hive:member2")
 	addTreasuryFunds(t, ct, projectID, "0.200")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:2.000", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:2.000:hive", "")
 	voteForProposal(t, ct, proposalID, "hive:someone", "hive:member2")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
@@ -806,7 +806,7 @@ func TestProposalExecuteBlockedWhenPaused(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	addTreasuryFunds(t, ct, projectID, "0.400")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200:hive", "")
 	votePayload := PayloadString(fmt.Sprintf("%d|1", proposalID))
 	CallContract(t, ct, "proposals_vote", votePayload, nil, "hive:someone", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(proposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
@@ -822,7 +822,7 @@ func TestProposalCancelFlow(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.200:hive", "")
 	res, _, _ := CallContract(t, ct, "proposal_cancel", PayloadString(fmt.Sprintf("%d", proposalID)), nil, "hive:someone", true, uint(1_000_000_000))
 	if !strings.Contains(res.Ret, "cancelled") {
 		t.Fatalf("expected cancellation, got %q", res.Ret)
@@ -897,7 +897,7 @@ func TestFullCycle(t *testing.T) {
 	CallContract(t, ct, "project_create", PayloadString("test|desc|0|50.001|50.001|1|0|10|1|1|||||1|"), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "project_join", PayloadString("0"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
 	addTreasuryFunds(t, ct, 0, "3.000")
-	CallContract(t, ct, "proposal_create", PayloadString("0|prpsl|desc|1||0|hive:tibfox:3||"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
+	CallContract(t, ct, "proposal_create", PayloadString("0|prpsl|desc|1||0|hive:tibfox:3:hive||"), transferIntent("1.000"), "hive:someoneelse", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", PayloadString("0|1"), nil, "hive:someone", true, uint(1_000_000_000))
 	CallContract(t, ct, "proposals_vote", PayloadString("0|1"), nil, "hive:someoneelse", true, uint(1_000_000_000))
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(0), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
@@ -1015,7 +1015,7 @@ func TestExecutionDelayMetaUpdate(t *testing.T) {
 	voteForProposal(t, ct, delayProposal, "hive:someone", "hive:someoneelse")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(delayProposal), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
 	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", delayProposal)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
-	target := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.100", "")
+	target := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.100:hive", "")
 	voteForProposal(t, ct, target, "hive:someone", "hive:someoneelse")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(target), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T01:00:00")
 	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", target)), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-03T05:00:00")
@@ -1032,13 +1032,13 @@ func TestOwnerCancelWithoutTreasuryRefund(t *testing.T) {
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	// Drain treasury via payout.
 	addTreasuryFunds(t, ct, projectID, "2.000")
-	spend := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:1.000", "")
+	spend := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:1.000:hive", "")
 	voteForProposal(t, ct, spend, "hive:someone", "hive:someoneelse")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(spend), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
 	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", spend)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T02:00:00")
 	// Create another proposal, then drain its cost deposit before cancelling.
 	target := createPollProposal(t, ct, projectID, "1", "", "")
-	drain := createPollProposal(t, ct, projectID, "1", "hive:someone:1.000", "")
+	drain := createPollProposal(t, ct, projectID, "1", "hive:someone:1.000:hive", "")
 	voteForProposal(t, ct, drain, "hive:someone", "hive:someoneelse")
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(drain), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T04:00:00")
 	CallContractAt(t, ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", drain)), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-03T04:00:00")
@@ -1056,7 +1056,7 @@ func TestPayoutLockReleasedAfterCancel(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	addTreasuryFunds(t, ct, projectID, "0.500")
-	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500", "")
+	proposalID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:0.500:hive", "")
 	res, _, _ := CallContract(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", false, uint(1_000_000_000))
 	if !strings.Contains(res.Ret, "active proposal requesting funds") {
 		t.Fatalf("expected payout lock to block leave, got %q", res.Ret)
@@ -1811,6 +1811,35 @@ func TestProposalOptionEmptyText(t *testing.T) {
 	}
 }
 
+// TestProposalRequiresAtLeastTwoOptions verifies that proposals need at least 2 options.
+func TestProposalRequiresAtLeastTwoOptions(t *testing.T) {
+	ct := SetupContractTest()
+
+	fields := defaultProjectFields()
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	projectID := parseCreatedID(t, res.Ret, "project")
+
+	// Try to create proposal with only 1 option
+	proposalFields := []string{
+		strconv.FormatUint(projectID, 10),
+		"test",
+		"test",
+		"1",
+		"Only One Option", // single option
+		"1",
+		"",
+		"",
+		"",
+	}
+	proposalPayload := strings.Join(proposalFields, "|")
+	res, _, _ = CallContract(t, ct, "proposal_create", PayloadString(proposalPayload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+
+	if !strings.Contains(res.Ret, "at least 2 options") {
+		t.Fatalf("expected minimum options error, got %q", res.Ret)
+	}
+}
+
 // TestProposalOptionsMixedURLs verifies that some options can have URLs while others don't.
 func TestProposalOptionsMixedURLs(t *testing.T) {
 	ct := SetupContractTest()
@@ -1915,7 +1944,7 @@ func TestProposalOptionDataURLRejected(t *testing.T) {
 		"test",
 		"test",
 		"1",
-		"Option###data:text/html,<script>alert('xss')</script>", // data URL
+		"Option###data:text/html,<script>alert('xss')</script>;Option B", // data URL in first option
 		"1",
 		"",
 		"",
@@ -1944,7 +1973,7 @@ func TestProposalOptionFileURLRejected(t *testing.T) {
 		"test",
 		"test",
 		"1",
-		"Option###file:///etc/passwd", // file URL
+		"Option###file:///etc/passwd;Option B", // file URL in first option
 		"1",
 		"",
 		"",
@@ -1973,7 +2002,7 @@ func TestProposalOptionHTTPSAllowed(t *testing.T) {
 		"test",
 		"test",
 		"1",
-		"Option###https://example.com/safe",
+		"Option A###https://example.com/safe;Option B",
 		"1",
 		"",
 		"",
@@ -2003,7 +2032,7 @@ func TestProposalOptionHTTPRejected(t *testing.T) {
 		"test",
 		"test",
 		"1",
-		"Option###http://example.com/safe",
+		"Option###http://example.com/safe;Option B",
 		"1",
 		"",
 		"",
@@ -2173,4 +2202,76 @@ func TestDemocraticPayoutThenMembersLeave(t *testing.T) {
 	// At this point, the DAO should have:
 	// - 0.05 HIVE stake (only owner remains, cannot leave)
 	// - 0 HBD treasury (paid out)
+}
+
+// TestProjectNameTooLong checks that project names exceeding 128 characters are rejected.
+func TestProjectNameTooLong(t *testing.T) {
+	ct := SetupContractTest()
+	fields := defaultProjectFields()
+	// Create a name that exceeds 128 characters
+	fields[0] = strings.Repeat("a", 129)
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "project name exceeds maximum length") {
+		t.Fatalf("expected name length rejection, got %q", res.Ret)
+	}
+}
+
+// TestProjectDescriptionTooLong checks that project descriptions exceeding 512 characters are rejected.
+func TestProjectDescriptionTooLong(t *testing.T) {
+	ct := SetupContractTest()
+	fields := defaultProjectFields()
+	// Create a description that exceeds 512 characters
+	fields[1] = strings.Repeat("a", 513)
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "project description exceeds maximum length") {
+		t.Fatalf("expected description length rejection, got %q", res.Ret)
+	}
+}
+
+// TestProposalNameTooLong checks that proposal names exceeding 128 characters are rejected.
+func TestProposalNameTooLong(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+
+	proposalFields := []string{
+		strconv.FormatUint(projectID, 10),
+		strings.Repeat("a", 129), // name exceeds 128 characters
+		"desc",
+		"24",
+		"opt1;opt2",
+		"1",
+		"",
+		"",
+		"",
+	}
+	proposalPayload := strings.Join(proposalFields, "|")
+	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(proposalPayload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "proposal name exceeds maximum length") {
+		t.Fatalf("expected name length rejection, got %q", res.Ret)
+	}
+}
+
+// TestProposalDescriptionTooLong checks that proposal descriptions exceeding 512 characters are rejected.
+func TestProposalDescriptionTooLong(t *testing.T) {
+	ct := SetupContractTest()
+	projectID := createDefaultProject(t, ct)
+
+	proposalFields := []string{
+		strconv.FormatUint(projectID, 10),
+		"proposal name",
+		strings.Repeat("a", 513), // description exceeds 512 characters
+		"24",
+		"opt1;opt2",
+		"1",
+		"",
+		"",
+		"",
+	}
+	proposalPayload := strings.Join(proposalFields, "|")
+	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(proposalPayload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "proposal description exceeds maximum length") {
+		t.Fatalf("expected description length rejection, got %q", res.Ret)
+	}
 }

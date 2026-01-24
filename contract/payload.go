@@ -18,9 +18,17 @@ func decodeCreateProjectArgs(payload *string) *CreateProjectArgs {
 		return ""
 	}
 
+	name := strings.TrimSpace(get(0))
+	description := strings.TrimSpace(get(1))
+	if len(name) > MaxNameLength {
+		sdk.Abort(fmt.Sprintf("project name exceeds maximum length of %d characters", MaxNameLength))
+	}
+	if len(description) > MaxDescriptionLength {
+		sdk.Abort(fmt.Sprintf("project description exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
 	args := &CreateProjectArgs{
-		Name:        strings.TrimSpace(get(0)),
-		Description: strings.TrimSpace(get(1)),
+		Name:        name,
+		Description: description,
 		Metadata:    normalizeOptionalField(get(13)),
 		URL:         normalizeOptionalField(get(16)),
 	}
@@ -76,6 +84,14 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 		return ""
 	}
 	projectID := parseUintField(get(0), "project id")
+	name := strings.TrimSpace(get(1))
+	description := strings.TrimSpace(get(2))
+	if len(name) > MaxNameLength {
+		sdk.Abort(fmt.Sprintf("proposal name exceeds maximum length of %d characters", MaxNameLength))
+	}
+	if len(description) > MaxDescriptionLength {
+		sdk.Abort(fmt.Sprintf("proposal description exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
 	duration := parseUintField(get(3), "proposal duration")
 	options := parseOptionsField(get(4))
 	forcePoll := parseBoolField(get(5))
@@ -95,8 +111,8 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 
 	return &CreateProposalArgs{
 		ProjectID:        projectID,
-		Name:             strings.TrimSpace(get(1)),
-		Description:      strings.TrimSpace(get(2)),
+		Name:             name,
+		Description:      description,
 		OptionsList:      options,
 		ProposalOutcome:  outcome,
 		ProposalDuration: duration,
@@ -345,9 +361,9 @@ func normalizeOptionalField(val string) string {
 	return val
 }
 
-// parsePayoutField parses payout entries in format addr:amount:asset or addr:amount (legacy).
-// New format: addr:amount:asset (e.g., "hive:alice:10:hive")
-// Legacy format: addr:amount (e.g., "hive:alice:10") - asset will be nil
+// parsePayoutField parses payout entries in format addr:amount:asset.
+// Format: addr:amount:asset (e.g., "hive:alice:10:hive" or "hive:alice:10:hbd")
+// Asset is required for all payouts.
 func parsePayoutField(val string) map[sdk.Address]PayoutEntry {
 	val = strings.TrimSpace(val)
 	if val == "" {
@@ -363,37 +379,31 @@ func parsePayoutField(val string) map[sdk.Address]PayoutEntry {
 
 		// Split by colons to detect format
 		parts := strings.Split(entry, ":")
-		if len(parts) < 2 {
-			sdk.Abort("invalid payout entry format (need addr:amount or addr:amount:asset)")
+		if len(parts) < 3 {
+			sdk.Abort("invalid payout entry format (need addr:amount:asset)")
 		}
 
-		// Find the amount position (last numeric part before optional asset)
-		// Format: protocol:address:amount or protocol:address:amount:asset
+		// Format: protocol:address:amount:asset
 		var addr sdk.Address
 		var amount Amount
 		var asset sdk.Asset
 
-		// Try new format first: addr:amount:asset
-		if len(parts) >= 3 {
-			// Last part might be asset
-			lastPart := parts[len(parts)-1]
-			secondLastPart := parts[len(parts)-2]
+		// Last part must be asset, second-to-last must be amount
+		lastPart := parts[len(parts)-1]
+		secondLastPart := parts[len(parts)-2]
 
-			// Check if last part is an asset (non-numeric)
-			if _, err := strconv.ParseFloat(lastPart, 64); err != nil {
-				// Last part is asset
-				asset = AssetFromString(lastPart)
-				amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
-				addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
-			} else {
-				// Legacy format: last part is amount
-				amount = FloatToAmount(mustParseFloat(lastPart, "invalid payout amount"))
-				addr = AddressFromString(strings.Join(parts[:len(parts)-1], ":"))
-				asset = sdk.Asset("") // Will be filled with project's default asset
-			}
-		} else {
-			sdk.Abort("invalid payout entry (need at least addr:amount)")
+		// Check if last part is an asset (non-numeric)
+		if _, err := strconv.ParseFloat(lastPart, 64); err == nil {
+			sdk.Abort("payout entry missing asset (format: addr:amount:asset)")
 		}
+
+		assetStr := strings.ToLower(lastPart)
+		if !isValidAsset(assetStr) {
+			sdk.Abort(fmt.Sprintf("payout asset %s is not supported", assetStr))
+		}
+		asset = AssetFromString(assetStr)
+		amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
+		addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
 
 		payouts[addr] = PayoutEntry{Amount: amount, Asset: asset}
 	}
@@ -586,7 +596,7 @@ func parseICCAssets(val string) map[sdk.Asset]Amount {
 			sdk.Abort("invalid ICC asset format (need ASSET=amount)")
 		}
 
-		assetStr := strings.TrimSpace(strings.ToUpper(parts[0]))
+		assetStr := strings.TrimSpace(strings.ToLower(parts[0]))
 		amountStr := strings.TrimSpace(parts[1])
 
 		if assetStr == "" {
@@ -594,6 +604,11 @@ func parseICCAssets(val string) map[sdk.Asset]Amount {
 		}
 
 		asset := AssetFromString(assetStr)
+
+		// Validate asset is supported
+		if !isValidAsset(assetStr) {
+			sdk.Abort(fmt.Sprintf("ICC asset %s is not supported", assetStr))
+		}
 
 		// Check if asset already exists
 		if _, exists := assets[asset]; exists {
