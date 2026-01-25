@@ -33,6 +33,24 @@ const (
 	MaxOptionTextLength = 500
 	// MaxURLLength limits the size of URLs (for projects, proposals, and options).
 	MaxURLLength = 500
+	// MaxProposalOptions limits the number of options per proposal.
+	MaxProposalOptions = 50
+	// MaxPayoutReceivers limits the number of payout entries per proposal.
+	MaxPayoutReceivers = 50
+	// MaxWhitelistAddresses limits the number of addresses per whitelist operation.
+	MaxWhitelistAddresses = 50
+	// MaxKickAddresses limits the number of addresses per kick_member operation.
+	MaxKickAddresses = 50
+	// MinProposalDurationHours enforces a minimum voting period.
+	MinProposalDurationHours = 1
+	// MinThresholdPercent is the minimum allowed threshold percentage.
+	MinThresholdPercent = 1.0
+	// MaxThresholdPercent is the maximum allowed threshold percentage.
+	MaxThresholdPercent = 100.0
+	// MinQuorumPercent is the minimum allowed quorum percentage.
+	MinQuorumPercent = 1.0
+	// MaxQuorumPercent is the maximum allowed quorum percentage.
+	MaxQuorumPercent = 100.0
 )
 
 // -----------------------------------------------------------------------------

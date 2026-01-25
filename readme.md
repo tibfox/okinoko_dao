@@ -1,4 +1,4 @@
-# Oinoko DAO – User Guide
+# Okinoko DAO – User Guide
 
 This smart contract powers community-driven projects on the [Magi Ecosystem](https://github.com/vsc-eco/). It allows users to create projects, join them, make proposals, vote on proposals, and manage shared funds - all in a transparent, on-chain way powered by Magi smart contracts fully integrated on [okinoko.io](https://okinoko.io).
 
@@ -203,9 +203,10 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 - `update_membershipNFTContractFunction=<methodName>`  
 - `update_membershipNFTPayload=<format>` (must contain `{nft}` and `{caller}`)  
 - `update_proposalCreatorRestriction=<0|1>`  
-- `update_url=<https://example.com>` (empty clears it)  
-- `update_owner=<memberAccount>`  
+- `update_url=<https://example.com>` (empty clears it)
+- `update_owner=<memberAccount>`
 - `toggle_pause=1`
+- `kick_member=<address1,address2,...>` - Remove members and refund their stake (cannot kick owner or members with active payouts). Existing votes on active proposals remain valid.
 
 Only `toggle_pause` proposals may be created and executed while the project is paused, ensuring the DAO can unfreeze itself even if the owner disappears.
 
@@ -493,6 +494,7 @@ Projects can enable whitelist-based access control:
 - `update_whitelistOnly=<0|1>` - Toggle whitelist enforcement
 - `whitelist_add=<address1;address2;...>` - Add addresses via proposal
 - `whitelist_remove=<address1;address2;...>` - Remove addresses via proposal
+- `kick_member=<address1,address2,...>` - Remove members via proposal (refunds stake, cannot kick owner or members with active payouts). Existing votes on active proposals remain valid.
 
 ### 10.5 Whitelist Events
 

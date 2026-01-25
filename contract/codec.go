@@ -164,7 +164,7 @@ func encodeProposalOption(w *binWriter, opt *ProposalOption) {
 	w.writeUint64(opt.VoterCount)
 }
 
-// encodeProposalOutcome first toggles presence, then writes meta map and payout map sorted.
+// encodeProposalOutcome first toggles presence, then writes meta map and payout slice.
 func encodeProposalOutcome(w *binWriter, out *ProposalOutcome) {
 	if out == nil {
 		w.writeBool(false)
@@ -172,21 +172,12 @@ func encodeProposalOutcome(w *binWriter, out *ProposalOutcome) {
 	}
 	w.writeBool(true)
 	w.writeStringMap(out.Meta)
-	if out.Payout == nil {
-		w.writeVarUint(0)
-	} else {
-		addresses := make([]string, 0, len(out.Payout))
-		for addr := range out.Payout {
-			addresses = append(addresses, AddressToString(addr))
-		}
-		sort.Strings(addresses)
-		w.writeVarUint(uint64(len(addresses)))
-		for _, addrStr := range addresses {
-			w.writeString(addrStr)
-			entry := out.Payout[AddressFromString(addrStr)]
-			w.writeAmount(entry.Amount)
-			w.writeAsset(entry.Asset)
-		}
+	// Write payout slice (supports multiple entries per address with different assets)
+	w.writeVarUint(uint64(len(out.Payout)))
+	for _, entry := range out.Payout {
+		w.writeAddress(entry.Address)
+		w.writeAmount(entry.Amount)
+		w.writeAsset(entry.Asset)
 	}
 	// Encode ICC calls
 	w.writeVarUint(uint64(len(out.ICC)))
@@ -610,7 +601,7 @@ func DecodeProposalOption(data []byte) (*ProposalOption, error) {
 	return &opt, nil
 }
 
-// decodeProposalOutcome rebuilds optional meta and payout maps for proposals.
+// decodeProposalOutcome rebuilds optional meta and payout slice for proposals.
 func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	exists, err := r.readBool()
 	if err != nil {
@@ -627,7 +618,8 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	payouts := make(map[sdk.Address]PayoutEntry, count)
+	// Read payout slice (supports multiple entries per address with different assets)
+	payouts := make([]PayoutEntry, 0, count)
 	for i := uint64(0); i < count; i++ {
 		addr, err := r.readString()
 		if err != nil {
@@ -641,7 +633,7 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 		if err != nil {
 			return nil, err
 		}
-		payouts[AddressFromString(addr)] = PayoutEntry{Amount: value, Asset: asset}
+		payouts = append(payouts, PayoutEntry{Address: AddressFromString(addr), Amount: value, Asset: asset})
 	}
 
 	// Decode ICC calls (backwards compatible - if missing, defaults to nil)

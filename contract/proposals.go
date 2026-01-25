@@ -122,7 +122,7 @@ func CreateProposal(payload *string) *string {
 	}
 
 	saveProposal(prpsl)
-	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
+	if prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
 		incrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
 	for i, optInput := range input.OptionsList {
@@ -165,7 +165,7 @@ func TallyProposal(proposalId *string) *string {
 		sdk.Abort(fmt.Sprintf("proposal still running until %s", time.Unix(deadline, 0).UTC().Format(time.RFC3339)))
 	}
 
-	// find best option
+	// find best option (on tie, higher index wins)
 	var totalVotes float64
 	var voterCount uint64
 	highestOptionId := -1
@@ -177,7 +177,7 @@ func TallyProposal(proposalId *string) *string {
 		totalVotes += weight
 		voterCount += opt.VoterCount
 
-		if weight > highestOptionValue {
+		if weight >= highestOptionValue {
 			highestOptionValue = weight
 			highestOptionId = i
 		}
@@ -208,7 +208,7 @@ func TallyProposal(proposalId *string) *string {
 			}
 		}
 	}
-	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
+	if prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
 		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
 
@@ -264,9 +264,9 @@ func ExecuteProposal(proposalID *string) *string {
 	stateChanged := false
 	metaChanged := false
 	if prpsl.Outcome != nil {
-		if prpsl.Outcome.Payout != nil {
+		if len(prpsl.Outcome.Payout) > 0 {
 			// Transfer each payout with its specified asset
-			for addr, entry := range prpsl.Outcome.Payout {
+			for _, entry := range prpsl.Outcome.Payout {
 				asset := entry.Asset
 				// Check treasury balance for this asset
 				treasuryBalance := getTreasuryBalance(prj.ID, asset)
@@ -279,8 +279,8 @@ func ExecuteProposal(proposalID *string) *string {
 				}
 				// Transfer to recipient
 				mAmount := AmountToInt64(entry.Amount)
-				sdk.HiveTransfer(addr, mAmount, asset)
-				emitFundsRemoved(prj.ID, AddressToString(addr), AmountToFloat(entry.Amount), AssetToString(asset), false)
+				sdk.HiveTransfer(entry.Address, mAmount, asset)
+				emitFundsRemoved(prj.ID, AddressToString(entry.Address), AmountToFloat(entry.Amount), AssetToString(asset), false)
 				fundsTransferred = true
 			}
 		}
@@ -294,6 +294,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid threshold update")
 					}
+					if v < MinThresholdPercent || v > MaxThresholdPercent {
+						sdk.Abort(fmt.Sprintf("threshold must be between %.0f%% and %.0f%%", MinThresholdPercent, MaxThresholdPercent))
+					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "threshold", fmt.Sprintf("%f", prj.Config.ThresholdPercent), fmt.Sprintf("%f", v))
 					prj.Config.ThresholdPercent = v
 					metaChanged = true
@@ -303,6 +306,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid quorum update")
 					}
+					if v < MinQuorumPercent || v > MaxQuorumPercent {
+						sdk.Abort(fmt.Sprintf("quorum must be between %.0f%% and %.0f%%", MinQuorumPercent, MaxQuorumPercent))
+					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "quorum", fmt.Sprintf("%f", prj.Config.QuorumPercent), fmt.Sprintf("%f", v))
 					prj.Config.QuorumPercent = v
 					metaChanged = true
@@ -311,6 +317,9 @@ func ExecuteProposal(proposalID *string) *string {
 					v, err := strconv.ParseUint(value, 10, 64)
 					if err != nil {
 						sdk.Abort("invalid proposal duration update")
+					}
+					if v < MinProposalDurationHours {
+						sdk.Abort(fmt.Sprintf("proposal duration must be at least %d hour(s)", MinProposalDurationHours))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalDuration", fmt.Sprintf("%d", prj.Config.ProposalDurationHours), value)
 					prj.Config.ProposalDurationHours = v
@@ -404,6 +413,13 @@ func ExecuteProposal(proposalID *string) *string {
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "owner", AddressToString(oldOwner), AddressToString(newOwnerAddr))
 					metaChanged = true
 					stateChanged = true
+				case "remove_owner":
+					// Make the project fully autonomous - no owner privileges
+					oldOwner := prj.Owner
+					prj.Owner = AddressFromString("")
+					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "owner", AddressToString(oldOwner), "")
+					metaChanged = true
+					stateChanged = true
 				case "update_url":
 					prev := prj.URL
 					prj.URL = normalizeOptionalField(value)
@@ -431,6 +447,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if len(addresses) == 0 {
 						sdk.Abort("whitelist_add metadata requires addresses")
 					}
+					if len(addresses) > MaxWhitelistAddresses {
+						sdk.Abort(fmt.Sprintf("whitelist_add cannot exceed %d addresses per proposal", MaxWhitelistAddresses))
+					}
 					added := addWhitelistEntries(prj.ID, addresses)
 					if len(added) > 0 {
 						emitWhitelistEvent(prj.ID, "add", added)
@@ -441,11 +460,27 @@ func ExecuteProposal(proposalID *string) *string {
 					if len(addresses) == 0 {
 						sdk.Abort("whitelist_remove metadata requires addresses")
 					}
+					if len(addresses) > MaxWhitelistAddresses {
+						sdk.Abort(fmt.Sprintf("whitelist_remove cannot exceed %d addresses per proposal", MaxWhitelistAddresses))
+					}
 					removed := removeWhitelistEntries(prj.ID, addresses)
 					if len(removed) > 0 {
 						emitWhitelistEvent(prj.ID, "remove", removed)
 						metaChanged = true
 					}
+				case "kick_member":
+					addresses := parseAddressList(value)
+					if len(addresses) == 0 {
+						sdk.Abort("kick_member requires addresses")
+					}
+					if len(addresses) > MaxKickAddresses {
+						sdk.Abort(fmt.Sprintf("kick_member cannot exceed %d addresses per proposal", MaxKickAddresses))
+					}
+					for _, addr := range addresses {
+						kickMember(prj, addr)
+					}
+					metaChanged = true
+					fundsTransferred = true
 				}
 			}
 		}
@@ -555,11 +590,14 @@ func CancelProposal(payload *string) *string {
 
 	caller := getSenderAddress()
 	callerAddr := caller
-	if callerAddr != prpsl.Creator && callerAddr != prj.Owner {
+	// For autonomous projects, only creator can cancel (no owner exists)
+	isOwner := hasOwner(prj) && callerAddr == prj.Owner
+	if callerAddr != prpsl.Creator && !isOwner {
 		sdk.Abort("only creator or owner can cancel")
 	}
 
-	refund := callerAddr != prpsl.Creator && prj.Config.ProposalCost > 0
+	// Refund only if owner (not creator) cancels and there's a proposal cost
+	refund := isOwner && callerAddr != prpsl.Creator && prj.Config.ProposalCost > 0
 	var refundAmount Amount
 	if refund {
 		refundAmount = FloatToAmount(prj.Config.ProposalCost)
@@ -579,7 +617,7 @@ func CancelProposal(payload *string) *string {
 	prpsl.ResultOptionID = -1
 	prpsl.ExecutableAt = 0
 
-	if prpsl.Outcome != nil && prpsl.Outcome.Payout != nil {
+	if prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
 		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
 
@@ -598,7 +636,7 @@ func percentageOf(value, percent float64) float64 {
 	return value * (percent / 100.0)
 }
 
-// allowsPauseMeta checks whether the meta payload only toggles pause state or transfers ownership.
+// allowsPauseMeta checks whether the meta payload only toggles pause state, transfers ownership, or removes owner.
 func allowsPauseMeta(meta map[string]string) bool {
 	if meta == nil {
 		return false
@@ -608,6 +646,9 @@ func allowsPauseMeta(meta map[string]string) bool {
 			return true
 		}
 		if _, ok := meta["update_owner"]; ok {
+			return true
+		}
+		if _, ok := meta["remove_owner"]; ok {
 			return true
 		}
 	}

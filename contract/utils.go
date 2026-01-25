@@ -109,6 +109,12 @@ func AssetFromString(s string) sdk.Asset { return sdk.Asset(s) }
 // AssetToString unwraps the ticker string for logs or SDK calls.
 func AssetToString(a sdk.Asset) string { return a.String() }
 
+// hasOwner checks if a project has an owner (is not autonomous).
+// Projects can become autonomous via the "remove_owner" proposal meta option.
+func hasOwner(prj *Project) bool {
+	return prj.Owner.String() != ""
+}
+
 // -----------------------------------------------------------------------------
 // Contract Existence Helpers
 // -----------------------------------------------------------------------------

@@ -41,22 +41,36 @@ func decrementPayoutLock(projectID uint64, addr sdk.Address) {
 	}
 }
 
-// incrementPayoutLocks loops the payout map so each beneficiary gets a lock entry.
-func incrementPayoutLocks(projectID uint64, payout map[sdk.Address]PayoutEntry) {
-	if payout == nil {
+// incrementPayoutLocks loops the payout slice so each unique beneficiary gets a lock entry.
+func incrementPayoutLocks(projectID uint64, payout []PayoutEntry) {
+	if len(payout) == 0 {
 		return
 	}
-	for addr := range payout {
-		incrementPayoutLock(projectID, addr)
+	// Track unique addresses to avoid double-incrementing
+	seen := make(map[string]bool)
+	for _, entry := range payout {
+		addrStr := entry.Address.String()
+		if seen[addrStr] {
+			continue
+		}
+		seen[addrStr] = true
+		incrementPayoutLock(projectID, entry.Address)
 	}
 }
 
 // decrementPayoutLocks removes all locks once a proposal outcome resolves.
-func decrementPayoutLocks(projectID uint64, payout map[sdk.Address]PayoutEntry) {
-	if payout == nil {
+func decrementPayoutLocks(projectID uint64, payout []PayoutEntry) {
+	if len(payout) == 0 {
 		return
 	}
-	for addr := range payout {
-		decrementPayoutLock(projectID, addr)
+	// Track unique addresses to avoid double-decrementing
+	seen := make(map[string]bool)
+	for _, entry := range payout {
+		addrStr := entry.Address.String()
+		if seen[addrStr] {
+			continue
+		}
+		seen[addrStr] = true
+		decrementPayoutLock(projectID, entry.Address)
 	}
 }

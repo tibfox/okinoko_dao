@@ -222,6 +222,9 @@ func parseOptionsField(val string) []ProposalOptionInput {
 		return []ProposalOptionInput{}
 	}
 	raw := strings.Split(val, ";")
+	if len(raw) > MaxProposalOptions {
+		sdk.Abort(fmt.Sprintf("proposal cannot have more than %d options", MaxProposalOptions))
+	}
 	opts := make([]ProposalOptionInput, 0, len(raw))
 	for _, opt := range raw {
 		opt = strings.TrimSpace(opt)
@@ -340,8 +343,20 @@ func normalizeProjectConfig(cfg *ProjectConfig) {
 	if cfg.QuorumPercent <= 0 {
 		cfg.QuorumPercent = FallbackQuorumPercent
 	}
+	// Validate threshold bounds
+	if cfg.ThresholdPercent < MinThresholdPercent || cfg.ThresholdPercent > MaxThresholdPercent {
+		sdk.Abort(fmt.Sprintf("threshold must be between %.0f%% and %.0f%%", MinThresholdPercent, MaxThresholdPercent))
+	}
+	// Validate quorum bounds
+	if cfg.QuorumPercent < MinQuorumPercent || cfg.QuorumPercent > MaxQuorumPercent {
+		sdk.Abort(fmt.Sprintf("quorum must be between %.0f%% and %.0f%%", MinQuorumPercent, MaxQuorumPercent))
+	}
 	if cfg.ProposalDurationHours <= 0 {
 		cfg.ProposalDurationHours = FallbackProposalDurationHours
+	}
+	// Enforce minimum proposal duration
+	if cfg.ProposalDurationHours < MinProposalDurationHours {
+		cfg.ProposalDurationHours = MinProposalDurationHours
 	}
 	if cfg.LeaveCooldownHours <= 0 {
 		cfg.LeaveCooldownHours = FallbackLeaveCooldownHours
@@ -363,14 +378,17 @@ func normalizeOptionalField(val string) string {
 
 // parsePayoutField parses payout entries in format addr:amount:asset.
 // Format: addr:amount:asset (e.g., "hive:alice:10:hive" or "hive:alice:10:hbd")
-// Asset is required for all payouts.
-func parsePayoutField(val string) map[sdk.Address]PayoutEntry {
+// Asset is required for all payouts. Multiple payouts to the same address with different assets are allowed.
+func parsePayoutField(val string) []PayoutEntry {
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return nil
 	}
-	payouts := map[sdk.Address]PayoutEntry{}
 	entries := strings.Split(val, ";")
+	if len(entries) > MaxPayoutReceivers {
+		sdk.Abort(fmt.Sprintf("proposal cannot have more than %d payout entries", MaxPayoutReceivers))
+	}
+	payouts := make([]PayoutEntry, 0, len(entries))
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -405,7 +423,7 @@ func parsePayoutField(val string) map[sdk.Address]PayoutEntry {
 		amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
 		addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
 
-		payouts[addr] = PayoutEntry{Amount: amount, Asset: asset}
+		payouts = append(payouts, PayoutEntry{Address: addr, Amount: amount, Asset: asset})
 	}
 	return payouts
 }
@@ -513,6 +531,8 @@ func decodeWhitelistPayload(payload *string) (uint64, []sdk.Address) {
 	if len(addresses) == 0 {
 		sdk.Abort("whitelist payload requires addresses")
 	}
+	// No max limit for owner-initiated whitelist operations.
+	// Proposal meta operations have their own limit (MaxWhitelistAddresses).
 	return projectID, addresses
 }
 

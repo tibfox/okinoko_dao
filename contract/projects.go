@@ -191,6 +191,9 @@ func WhitelistMembers(payload *string) *string {
 	projectID, addresses := decodeWhitelistPayload(payload)
 	prj := loadProject(projectID)
 	caller := getSenderAddress()
+	if !hasOwner(prj) {
+		sdk.Abort("project is autonomous - no owner privileges")
+	}
 	if caller != prj.Owner {
 		sdk.Abort("only owner can update whitelist")
 	}
@@ -209,6 +212,9 @@ func RemoveWhitelistedMembers(payload *string) *string {
 	projectID, addresses := decodeWhitelistPayload(payload)
 	prj := loadProject(projectID)
 	caller := getSenderAddress()
+	if !hasOwner(prj) {
+		sdk.Abort("project is autonomous - no owner privileges")
+	}
 	if caller != prj.Owner {
 		sdk.Abort("only owner can update whitelist")
 	}
@@ -238,8 +244,8 @@ func LeaveProject(projectID *string) *string {
 
 	member := getMember(prj.ID, callerAddr)
 
-	// Owner must transfer ownership before leaving
-	if callerAddr == prj.Owner {
+	// Owner must transfer ownership before leaving (unless project is autonomous)
+	if hasOwner(prj) && callerAddr == prj.Owner {
 		sdk.Abort("owner must transfer ownership before leaving")
 	}
 
@@ -388,6 +394,44 @@ func getMember(projectID uint64, user sdk.Address) Member {
 	return *member
 }
 
+// kickMember removes a member via proposal, refunding their stake.
+// Silently skips non-members (they may have left before execution).
+func kickMember(prj *Project, addr sdk.Address) {
+	member, exists := loadMember(prj.ID, addr)
+	if !exists {
+		return // silently skip non-members
+	}
+
+	// Can't kick owner
+	if hasOwner(prj) && addr == prj.Owner {
+		sdk.Abort("cannot kick project owner")
+	}
+
+	// Check payout locks
+	if hasActivePayout(prj.ID, addr) {
+		sdk.Abort(fmt.Sprintf("cannot kick %s: active payout pending", AddressToString(addr)))
+	}
+
+	// Refund stake
+	withdraw := member.Stake
+	mAmount := AmountToInt64(withdraw)
+	sdk.HiveTransfer(addr, mAmount, prj.FundsAsset)
+
+	// Cleanup
+	deleteAllStakeHistory(prj.ID, addr, member.StakeIncrement)
+	deleteMember(prj.ID, addr)
+
+	// Update project
+	if prj.MemberCount > 0 {
+		prj.MemberCount--
+	}
+	prj.StakeTotal -= withdraw
+
+	// Events
+	emitLeaveEvent(prj.ID, AddressToString(addr))
+	emitFundsRemoved(prj.ID, AddressToString(addr), AmountToFloat(withdraw), AssetToString(prj.FundsAsset), true)
+}
+
 // TransferProjectOwnership lets the owner hand over control, but we enforce the target is still a member.
 // Example payload: TransferProjectOwnership(strptr("5|hive:alice"))
 //
@@ -414,6 +458,9 @@ func TransferProjectOwnership(payload *string) *string {
 	callerAddr := caller
 	newOwnerAddr := AddressFromString(newOwnerStr)
 	prj := loadProject(id)
+	if !hasOwner(prj) {
+		sdk.Abort("project is autonomous - no owner to transfer")
+	}
 	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can transfer")
 	}
@@ -452,6 +499,9 @@ func EmergencyPauseImmediate(payload *string) *string {
 	caller := getSenderAddress()
 	callerAddr := caller
 	prj := loadProject(id)
+	if !hasOwner(prj) {
+		sdk.Abort("project is autonomous - use proposal to pause/unpause")
+	}
 	if callerAddr != prj.Owner {
 		sdk.Abort("only owner can pause/unpause")
 	}

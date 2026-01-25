@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"vsc-node/lib/test_utils"
@@ -131,4 +132,157 @@ func PayloadString(val string) json.RawMessage {
 // PayloadUint64 converts an id to its ASCII digits for wasm call payloads.
 func PayloadUint64(val uint64) json.RawMessage {
 	return json.RawMessage([]byte(strconv.FormatUint(val, 10)))
+}
+
+// =============================================================================
+// Test Helper Functions
+// =============================================================================
+
+// parseCreatedID reads the `msg:<id>` responses so the tests can reuse the same helper everywhere.
+func parseCreatedID(t *testing.T, ret string, entity string) uint64 {
+	cleaned := strings.TrimSpace(ret)
+	cleaned = strings.TrimPrefix(cleaned, "msg:")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		t.Fatalf("empty return when parsing %s id", entity)
+	}
+	id, err := strconv.ParseUint(cleaned, 10, 64)
+	if err != nil {
+		t.Fatalf("failed to parse %s id from %q: %v", entity, cleaned, err)
+	}
+	return id
+}
+
+// transferIntent crafts a simple hive transfer.allow intent used by most tests.
+func transferIntent(limit string) []contracts.Intent {
+	return transferIntentWithToken(limit, "hive")
+}
+
+// transferIntentWithToken allows tests to swap the token for negative scenarios.
+func transferIntentWithToken(limit string, token string) []contracts.Intent {
+	return []contracts.Intent{{Type: "transfer.allow", Args: map[string]string{"limit": limit, "token": token}}}
+}
+
+// containsNFTGateMessage returns true if the error indicates NFT gating blocked access.
+func containsNFTGateMessage(msg string) bool {
+	return strings.Contains(msg, "membership nft not owned") || strings.Contains(msg, "contract contract:mocknft does not exist")
+}
+
+// joinProjectMember wraps the repeated join call to keep tests terse.
+func joinProjectMember(t *testing.T, ct *test_utils.ContractTest, projectID uint64, user string) {
+	CallContract(t, ct, "project_join", PayloadString(strconv.FormatUint(projectID, 10)), transferIntent("1.000"), user, true, uint(1_000_000_000))
+}
+
+// voteForProposal reuses the same payload to submit yes votes from multiple members.
+func voteForProposal(t *testing.T, ct *test_utils.ContractTest, proposalID uint64, voters ...string) {
+	payload := PayloadString(fmt.Sprintf("%d|1", proposalID))
+	for _, voter := range voters {
+		CallContract(t, ct, "proposals_vote", payload, nil, voter, true, uint(1_000_000_000))
+	}
+}
+
+// createDefaultProject uses the default field template and returns the new project id.
+func createDefaultProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
+	payload := strings.Join(defaultProjectFields(), "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "project")
+}
+
+// createProjectWithVoting tweaks the default fields with a custom voting mode before deploying.
+func createProjectWithVoting(t *testing.T, ct *test_utils.ContractTest, voting string) uint64 {
+	fields := defaultProjectFields()
+	fields[2] = voting
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "project")
+}
+
+// createWhitelistProject builds a project with whitelist enforcement enabled.
+func createWhitelistProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
+	fields := defaultProjectFields()
+	fields[len(fields)-1] = "1"
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "project")
+}
+
+// createNftGatedProject configures membership contract requirements for whitelist tests.
+func createNftGatedProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
+	fields := defaultProjectFields()
+	fields[10] = "contract:mocknft"
+	fields[11] = "owns"
+	fields[12] = "1"
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "project")
+}
+
+// createSimpleProposal assembles a minimal non-payout proposal for helper cases.
+func createSimpleProposal(t *testing.T, ct *test_utils.ContractTest, projectID uint64, duration string) uint64 {
+	payload := strings.Join(simpleProposalFields(projectID, duration), "|")
+	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "proposal")
+}
+
+// simpleProposalFields returns the base pipe-delimited fields used by helper builders.
+func simpleProposalFields(projectID uint64, duration string) []string {
+	return []string{
+		strconv.FormatUint(projectID, 10),
+		"maintenance",
+		"upgrade nodes",
+		duration,
+		"",
+		"0",
+		"",
+		"",
+		"",
+	}
+}
+
+// createPollProposal spawns a poll-style proposal optionally including payouts/meta updates.
+func createPollProposal(t *testing.T, ct *test_utils.ContractTest, projectID uint64, duration string, payouts string, meta string) uint64 {
+	fields := []string{
+		strconv.FormatUint(projectID, 10),
+		"payout",
+		"treasury distribution",
+		duration,
+		"",
+		"0",
+		payouts,
+		meta,
+		"",
+	}
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "proposal")
+}
+
+// addTreasuryFunds injects some hive into a project so payout tests can execute.
+func addTreasuryFunds(t *testing.T, ct *test_utils.ContractTest, projectID uint64, amount string) {
+	payload := fmt.Sprintf("%d|false", projectID)
+	CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent(amount), "hive:someone", true, uint(1_000_000_000))
+}
+
+// defaultProjectFields returns the canonical test fixture for quick DAO deployments.
+func defaultProjectFields() []string {
+	return []string{
+		"dao",
+		"desc",
+		"0",
+		"50.001",
+		"50.001",
+		"1",
+		"0",
+		"10",
+		"1",
+		"1",
+		"",
+		"",
+		"",
+		"",
+		"1",
+		"",
+		"",
+		"",
+	}
 }

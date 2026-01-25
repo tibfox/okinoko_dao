@@ -47,29 +47,13 @@ func formatMetadataMap(meta map[string]string) string {
 	return strings.Join(parts, ";")
 }
 
-func formatPayoutMap(payout map[sdk.Address]PayoutEntry) string {
+func formatPayoutMap(payout []PayoutEntry) string {
 	if len(payout) == 0 {
 		return ""
 	}
-	type payoutEntryFormatted struct {
-		addr   string
-		amount Amount
-		asset  sdk.Asset
-	}
-	entries := make([]payoutEntryFormatted, 0, len(payout))
-	for addr, entry := range payout {
-		entries = append(entries, payoutEntryFormatted{
-			addr:   AddressToString(addr),
-			amount: entry.Amount,
-			asset:  entry.Asset,
-		})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].addr < entries[j].addr
-	})
-	out := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, fmt.Sprintf("%s:%f:%s", entry.addr, AmountToFloat(entry.amount), AssetToString(entry.asset)))
+	out := make([]string, 0, len(payout))
+	for _, entry := range payout {
+		out = append(out, fmt.Sprintf("%s:%f:%s", AddressToString(entry.Address), AmountToFloat(entry.Amount), AssetToString(entry.Asset)))
 	}
 	return strings.Join(out, ";")
 }

@@ -138,10 +138,11 @@ type ProposalOption struct {
 	VoterCount  uint64
 }
 
-// PayoutEntry represents a single payout with asset specification
+// PayoutEntry represents a single payout with address and asset specification
 type PayoutEntry struct {
-	Amount Amount
-	Asset  sdk.Asset
+	Address sdk.Address
+	Amount  Amount
+	Asset   sdk.Asset
 }
 
 // InterContractCall represents a single inter-contract call with asset transfers
@@ -154,7 +155,7 @@ type InterContractCall struct {
 
 type ProposalOutcome struct {
 	Meta   map[string]string
-	Payout map[sdk.Address]PayoutEntry
+	Payout []PayoutEntry       // Supports multiple payouts per address with different assets
 	ICC    []InterContractCall // Inter-contract calls to execute
 }
 
