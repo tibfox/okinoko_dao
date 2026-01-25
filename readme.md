@@ -27,6 +27,17 @@ graph LR
 - **Proposals** are voted on using your stake at the time the proposal was created
 - Your vote weight is always based on your historical stake, preventing manipulation
 
+**Multi-Tenant Design:**
+
+This contract uses a multi-tenant architecture where all DAOs share a single deployed contract. Each DAO (project) is logically isolated via unique project IDs. Benefits of this approach:
+
+- **No admin privileges**: The contract deployer has zero access to any DAO's funds or governance - each project is fully self-custodial
+- **Consistent upgrades**: Bug fixes and improvements benefit all DAOs simultaneously
+- **Single entry point**: Users interact with one contract address for all DAOs
+- **Battle-tested isolation**: Project IDs provide clean separation without the complexity of separate deployments
+
+For full sovereignty, anyone can deploy their own instance of this contract. Feel free to reach out for help if needed.
+
 ---
 
 ## 1. What You Can Do
