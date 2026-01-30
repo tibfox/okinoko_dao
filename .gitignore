@@ -1,6 +1,4 @@
 .DS_Store
-main.wasm
-main-striped.wasm
 .env
 hiveConfig.json
 identityConfig.json
@@ -11,3 +9,4 @@ artifacts/
 .gocache/
 .vscode/
 .claude/
+go/
