@@ -86,6 +86,7 @@ func decodeVoteRecord(data string) *voteRecord {
 //
 //go:wasmexport proposals_vote
 func VoteProposal(payload *string) *string {
+	requireInitialized()
 	input := decodeVoteProposalArgs(payload)
 	prpsl := loadProposal(input.ProposalID)
 

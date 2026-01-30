@@ -36,7 +36,9 @@ This contract uses a multi-tenant architecture where all DAOs share a single dep
 - **Single entry point**: Users interact with one contract address for all DAOs
 - **Battle-tested isolation**: Project IDs provide clean separation without the complexity of separate deployments
 
-For full sovereignty, anyone can deploy their own instance of this contract. Feel free to reach out for help if needed.
+For full sovereignty, anyone can deploy their own instance of this contract.
+
+**Initialization:** After deployment, the contract must be initialized via `contract_init` before any other function can be used. The initializer becomes the contract owner and chooses whether project creation is public or owner-only.
 
 ---
 
@@ -189,6 +191,7 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 
 | Action / Export | Payload | Description | Return |
 |-----------------|---------|-------------|--------|
+| `contract_init` | `public` or `owner-only` | **Must be called first.** Initializes the contract with the caller as owner. `public` allows anyone to create projects, `owner-only` restricts project creation to the contract owner. | `"initialized with public/owner-only project creation"` |
 | `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?` | Creates a new project with multi-asset treasury support. Name max 128 chars, description max 512 chars. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
 | `project_join` | `projectId` | Joins a project using the caller's first `transfer.allow` intent. Aborts if paused or the caller fails NFT membership checks. | `"joined"` |
 | `project_leave` | `projectId` | Starts/finishes the leave cooldown. Blocks when payouts targeting the member are still active. **Owners must transfer ownership before leaving.** | `"exit requested"` / `"exit finished"` |

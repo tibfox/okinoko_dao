@@ -26,8 +26,18 @@ const defaultTimestamp = "2025-09-03T00:00:00"
 //go:embed artifacts/main.wasm
 var ContractWasm []byte
 
-// Setup an Instance of a test
+// Setup an Instance of a test (initializes contract with public project creation)
 func SetupContractTest() *test_utils.ContractTest {
+	return setupContractTestWithMode("public")
+}
+
+// SetupContractTestOwnerOnly initializes the contract with owner-only project creation
+func SetupContractTestOwnerOnly() *test_utils.ContractTest {
+	return setupContractTestWithMode("owner-only")
+}
+
+// SetupContractTestUninitialized returns a test instance without calling contract_init
+func SetupContractTestUninitialized() *test_utils.ContractTest {
 	CleanBadgerDB()
 	ct := test_utils.NewContractTest()
 	ct.RegisterContract(ContractID, ownerAddress, ContractWasm)
@@ -39,10 +49,54 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHbd)
 	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHive)
 	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHbd)
+	ct.Deposit(ownerAddress, 200000, ledgerDb.AssetHive)
+	ct.Deposit(ownerAddress, 200000, ledgerDb.AssetHbd)
+	return &ct
+}
+
+// setupContractTestWithMode is the internal setup that handles initialization mode
+func setupContractTestWithMode(mode string) *test_utils.ContractTest {
+	CleanBadgerDB()
+	ct := test_utils.NewContractTest()
+	ct.RegisterContract(ContractID, ownerAddress, ContractWasm)
+	ct.Deposit("hive:someone", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someone", 200000, ledgerDb.AssetHbd)
+	ct.Deposit("hive:someoneelse", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:someoneelse", 200000, ledgerDb.AssetHbd)
+	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:member2", 200000, ledgerDb.AssetHbd)
+	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHive)
+	ct.Deposit("hive:outsider", 200000, ledgerDb.AssetHbd)
+	ct.Deposit(ownerAddress, 200000, ledgerDb.AssetHive)
+	ct.Deposit(ownerAddress, 200000, ledgerDb.AssetHbd)
 	// NOTE: hbd_savings deposits don't work via ct.Deposit() - the ledger system
 	// calculates hbd_savings from "stake" operations, not deposits.
 
+	// Initialize the contract
+	initContract(&ct, mode)
+
 	return &ct
+}
+
+// initContract calls contract_init with the specified mode
+func initContract(ct *test_utils.ContractTest, mode string) {
+	ct.Call(stateEngine.TxVscCallContract{
+		Caller: ownerAddress,
+		Self: stateEngine.TxSelf{
+			TxId:                 "init-tx",
+			BlockId:              "block0",
+			Index:                0,
+			OpIndex:              0,
+			Timestamp:            defaultTimestamp,
+			RequiredAuths:        []string{ownerAddress},
+			RequiredPostingAuths: []string{},
+		},
+		ContractId: ContractID,
+		Action:     "contract_init",
+		Payload:    json.RawMessage(strconv.Quote(mode)),
+		RcLimit:    100000,
+		Intents:    nil,
+	})
 }
 
 // clean the db for multiple (sequential) tests

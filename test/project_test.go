@@ -10,6 +10,64 @@ import (
 )
 
 // =============================================================================
+// Contract Initialization Tests
+// =============================================================================
+
+// TestContractInitPublic verifies that contract_init works with public mode
+func TestContractInitPublic(t *testing.T) {
+	ct := SetupContractTestUninitialized()
+	res, _, _ := CallContract(t, ct, "contract_init", PayloadString("public"), nil, ownerAddress, true, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "public") {
+		t.Fatalf("expected public init message, got %q", res.Ret)
+	}
+}
+
+// TestContractInitOwnerOnly verifies that contract_init works with owner-only mode
+func TestContractInitOwnerOnly(t *testing.T) {
+	ct := SetupContractTestUninitialized()
+	res, _, _ := CallContract(t, ct, "contract_init", PayloadString("owner-only"), nil, ownerAddress, true, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "owner-only") {
+		t.Fatalf("expected owner-only init message, got %q", res.Ret)
+	}
+}
+
+// TestContractInitOnlyOnce verifies that contract_init can only be called once
+func TestContractInitOnlyOnce(t *testing.T) {
+	ct := SetupContractTest() // Already initialized
+	res, _, _ := CallContract(t, ct, "contract_init", PayloadString("public"), nil, ownerAddress, false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "already initialized") {
+		t.Fatalf("expected already initialized error, got %q", res.Ret)
+	}
+}
+
+// TestUninitializedContractRejects verifies that functions fail before init
+func TestUninitializedContractRejects(t *testing.T) {
+	ct := SetupContractTestUninitialized()
+	fields := defaultProjectFields()
+	payload := strings.Join(fields, "|")
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "not initialized") {
+		t.Fatalf("expected not initialized error, got %q", res.Ret)
+	}
+}
+
+// TestOwnerOnlyProjectCreation verifies that only owner can create projects in owner-only mode
+func TestOwnerOnlyProjectCreation(t *testing.T) {
+	ct := SetupContractTestOwnerOnly()
+	fields := defaultProjectFields()
+	payload := strings.Join(fields, "|")
+
+	// Non-owner should fail
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "only contract owner") {
+		t.Fatalf("expected owner-only error, got %q", res.Ret)
+	}
+
+	// Owner should succeed
+	CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), ownerAddress, true, uint(1_000_000_000))
+}
+
+// =============================================================================
 // Project Creation Tests
 // =============================================================================
 

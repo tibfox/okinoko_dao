@@ -14,6 +14,7 @@ import (
 //
 //go:wasmexport proposal_create
 func CreateProposal(payload *string) *string {
+	requireInitialized()
 	input := decodeCreateProposalArgs(payload)
 
 	caller := getSenderAddress()
@@ -149,6 +150,7 @@ func CreateProposal(payload *string) *string {
 //
 //go:wasmexport proposal_tally
 func TallyProposal(proposalId *string) *string {
+	requireInitialized()
 	raw := unwrapPayload(proposalId, "proposal ID is required")
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
@@ -226,6 +228,7 @@ func TallyProposal(proposalId *string) *string {
 //
 //go:wasmexport proposal_execute
 func ExecuteProposal(proposalID *string) *string {
+	requireInitialized()
 	raw := unwrapPayload(proposalID, "proposal ID is required")
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
@@ -577,6 +580,7 @@ func loadProposal(id uint64) *Proposal {
 //
 //go:wasmexport proposal_cancel
 func CancelProposal(payload *string) *string {
+	requireInitialized()
 	raw := unwrapPayload(payload, "proposal ID is required")
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {

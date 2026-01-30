@@ -18,6 +18,12 @@ type VotingSystem uint8
 // ProposalState captures a proposal's lifecycle.
 type ProposalState uint8
 
+// ContractConfig stores contract-level settings set during initialization.
+type ContractConfig struct {
+	Owner                 sdk.Address // Contract owner who initialized the contract
+	ProjectCreationPublic bool        // If false, only owner can create projects
+}
+
 // FloatToAmount scales human floats by AmountScale and rounds to int64 so storage stays precise.
 // Example payload: FloatToAmount(1.234)
 func FloatToAmount(v float64) Amount {

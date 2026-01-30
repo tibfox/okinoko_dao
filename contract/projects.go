@@ -17,9 +17,17 @@ import (
 //
 //go:wasmexport project_create
 func CreateProject(payload *string) *string {
+	requireInitialized()
+
+	// Check project creation permission
+	cfg := loadContractConfig()
+	caller := getSenderAddress()
+	if !cfg.ProjectCreationPublic && !isContractOwner(caller) {
+		sdk.Abort("only contract owner can create projects")
+	}
+
 	input := decodeCreateProjectArgs(payload)
 
-	caller := getSenderAddress()
 	callerAddr := caller
 	callerStr := caller.String()
 
@@ -109,6 +117,7 @@ func CreateProject(payload *string) *string {
 //
 //go:wasmexport project_join
 func JoinProject(projectID *string) *string {
+	requireInitialized()
 	rawID := unwrapPayload(projectID, "project ID is required")
 	id, err := strconv.ParseUint(rawID, 10, 64)
 	if err != nil {
@@ -188,6 +197,7 @@ func JoinProject(projectID *string) *string {
 //
 //go:wasmexport project_whitelist_add
 func WhitelistMembers(payload *string) *string {
+	requireInitialized()
 	projectID, addresses := decodeWhitelistPayload(payload)
 	prj := loadProject(projectID)
 	caller := getSenderAddress()
@@ -209,6 +219,7 @@ func WhitelistMembers(payload *string) *string {
 //
 //go:wasmexport project_whitelist_remove
 func RemoveWhitelistedMembers(payload *string) *string {
+	requireInitialized()
 	projectID, addresses := decodeWhitelistPayload(payload)
 	prj := loadProject(projectID)
 	caller := getSenderAddress()
@@ -230,6 +241,7 @@ func RemoveWhitelistedMembers(payload *string) *string {
 //
 //go:wasmexport project_leave
 func LeaveProject(projectID *string) *string {
+	requireInitialized()
 	raw := unwrapPayload(projectID, "project ID is required")
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
@@ -326,6 +338,7 @@ func checkNFTMembership(prj *Project, callerAddr sdk.Address) bool {
 //
 //go:wasmexport project_funds
 func AddFunds(payload *string) *string {
+	requireInitialized()
 	input := decodeAddFundsArgs(payload)
 	prj := loadProject(input.ProjectID)
 	caller := getSenderAddress()
@@ -437,6 +450,7 @@ func kickMember(prj *Project, addr sdk.Address) {
 //
 //go:wasmexport project_transfer
 func TransferProjectOwnership(payload *string) *string {
+	requireInitialized()
 	raw := unwrapPayload(payload, "transfer payload required")
 	parts := strings.Split(raw, "|")
 	if len(parts) < 2 {
@@ -479,6 +493,7 @@ func TransferProjectOwnership(payload *string) *string {
 //
 //go:wasmexport project_pause
 func EmergencyPauseImmediate(payload *string) *string {
+	requireInitialized()
 	raw := unwrapPayload(payload, "pause payload required")
 	parts := strings.Split(raw, "|")
 	if len(parts) == 0 {

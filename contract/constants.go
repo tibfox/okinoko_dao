@@ -71,6 +71,15 @@ const (
 )
 
 // -----------------------------------------------------------------------------
+// Contract-Level Keys
+// -----------------------------------------------------------------------------
+
+const (
+	// ContractConfigKey stores the contract configuration (owner, permissions).
+	ContractConfigKey = "contract:cfg"
+)
+
+// -----------------------------------------------------------------------------
 // Counter Keys
 // -----------------------------------------------------------------------------
 
@@ -88,6 +97,8 @@ const (
 // -----------------------------------------------------------------------------
 
 const (
+	// kContractConfig stores the contract-level configuration (owner, permissions).
+	kContractConfig byte = 0x00
 	// kProjectMeta stores serialized ProjectMeta blobs.
 	kProjectMeta byte = 0x01
 	// kProjectConfig stores ProjectConfig fragments so config updates touch fewer bytes.

@@ -75,6 +75,15 @@ func formatOptionsList(opts []ProposalOptionInput) string {
 	return strings.Join(clean, ";")
 }
 
+// emitInitEvent logs contract initialization with owner and mode.
+func emitInitEvent(owner string, mode string) {
+	sdk.Log(fmt.Sprintf(
+		"shindao_init|owner:%s|mode:%s",
+		owner,
+		mode,
+	))
+}
+
 // emitJoinedEvent writes a tiny "mj" log so watchers know someone fresh just joined the project adress.
 func emitJoinedEvent(projectId uint64, memberAddress string) {
 	sdk.Log(fmt.Sprintf(
