@@ -31,23 +31,43 @@ func CreateProject(payload *string) *string {
 	callerAddr := caller
 	callerStr := caller.String()
 
-	// --- get first valid transfer intent ---
-	ta := getFirstTransferAllow()
-	if ta == nil {
-		sdk.Abort("no valid transfer intent provided")
-	}
-	tokenStr := ta.Token.String()
+	// --- determine stake and asset ---
+	var baseAsset sdk.Asset
+	var stakeAmount Amount
+	var depositAmount Amount
+	var treasuryAmount Amount
 
-	// determine required initial stake
-	stakeLimit := ta.Limit
-	stakeMin := stakeLimit
-	if input.ProjectConfig.StakeMinAmt > 0 {
-		stakeMin = input.ProjectConfig.StakeMinAmt
+	// Check if this is a free membership DAO (no stake required)
+	freeMembership := input.ProjectConfig.StakeMinAmt <= 0
+
+	if freeMembership {
+		// No intent required for free membership DAOs
+		baseAsset = sdk.AssetHive
+		stakeAmount = 0
+		depositAmount = 0
+		treasuryAmount = 0
+		input.ProjectConfig.StakeMinAmt = 0
+	} else {
+		// Paid membership requires a transfer intent
+		ta := getFirstTransferAllow()
+		if ta == nil {
+			sdk.Abort("no valid transfer intent provided")
+		}
+		baseAsset = ta.Token
+
+		// determine required initial stake
+		stakeLimit := ta.Limit
+		stakeMin := input.ProjectConfig.StakeMinAmt
 		if FloatToAmount(stakeMin) > FloatToAmount(stakeLimit) {
 			sdk.Abort(fmt.Sprintf("transfer limit %f < StakeMinAmt %f", stakeLimit, stakeMin))
 		}
-	} else {
-		input.ProjectConfig.StakeMinAmt = stakeLimit
+
+		stakeAmount = FloatToAmount(stakeMin)
+		depositAmount = FloatToAmount(stakeLimit)
+		treasuryAmount = depositAmount - stakeAmount
+
+		// Draw funds from the intent
+		sdk.HiveDraw(AmountToInt64(depositAmount), ta.Token)
 	}
 
 	// --- create project ---
@@ -59,11 +79,6 @@ func CreateProject(payload *string) *string {
 		txID = *txPtr
 	}
 
-	// Calculate amounts to avoid rounding errors
-	stakeAmount := FloatToAmount(stakeMin)
-	depositAmount := FloatToAmount(ta.Limit)
-	treasuryAmount := depositAmount - stakeAmount
-
 	prj := Project{
 		ID:          id,
 		Owner:       callerAddr,
@@ -71,7 +86,7 @@ func CreateProject(payload *string) *string {
 		Description: input.Description,
 		URL:         input.URL,
 		Metadata:    input.Metadata,
-		FundsAsset:  ta.Token,
+		FundsAsset:  baseAsset,
 		Paused:      false,
 		Tx:          txID,
 		StakeTotal:  stakeAmount,
@@ -87,26 +102,24 @@ func CreateProject(payload *string) *string {
 		Reputation:     0,
 		StakeIncrement: 0,
 	}
-	// draw the funds
-	mAmount := AmountToInt64(depositAmount)
-	sdk.HiveDraw(mAmount, ta.Token)
 	saveMember(prj.ID, &creatorMember)
 	// Save initial stake history
 	saveStakeHistory(prj.ID, callerAddr, stakeAmount, now, 0)
 	// Initialize treasury with the treasury amount
 	if treasuryAmount > 0 {
-		addTreasuryFunds(prj.ID, ta.Token, treasuryAmount)
+		addTreasuryFunds(prj.ID, baseAsset, treasuryAmount)
 	}
 	// save project
 	saveProject(&prj)
 	setCount(ProjectsCount, id+1)
 
+	tokenStr := baseAsset.String()
 	emitProjectCreatedEvent(&prj, callerStr)
-	stakeAmountFloat := AmountToFloat(stakeAmount)
-	treasuryAmountFloat := AmountToFloat(treasuryAmount)
-	emitFundsAdded(prj.ID, callerStr, stakeAmountFloat, tokenStr, true)
+	if stakeAmount > 0 {
+		emitFundsAdded(prj.ID, callerStr, AmountToFloat(stakeAmount), tokenStr, true)
+	}
 	if treasuryAmount > 0 {
-		emitFundsAdded(prj.ID, callerStr, treasuryAmountFloat, tokenStr, false)
+		emitFundsAdded(prj.ID, callerStr, AmountToFloat(treasuryAmount), tokenStr, false)
 	}
 	result := strconv.FormatUint(id, 10)
 	return &result
@@ -144,33 +157,47 @@ func JoinProject(projectID *string) *string {
 		}
 		deleteWhitelistEntry(prj.ID, callerAddr)
 	}
-	// --- get first valid transfer intent ---
-	ta := getFirstTransferAllow()
-	if ta == nil {
-		sdk.Abort("no valid transfer intent provided")
-	}
-	if ta.Token != prj.FundsAsset {
-		sdk.Abort(fmt.Sprintf("invalid asset, expected %s", AssetToString(prj.FundsAsset)))
-	}
 
-	if prj.Config.VotingSystem == VotingSystemDemocratic {
-		expectedStake := FloatToAmount(prj.Config.StakeMinAmt)
-		providedStake := FloatToAmount(ta.Limit)
-		if providedStake != expectedStake {
-			sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
-		}
-	}
-
-	if prj.Config.VotingSystem == VotingSystemStake {
-		requiredStake := FloatToAmount(prj.Config.StakeMinAmt)
-		providedStake := FloatToAmount(ta.Limit)
-		if providedStake < requiredStake {
-			sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
-		}
-	}
 	now := nowUnix()
+	var depositAmount Amount
 
-	depositAmount := FloatToAmount(ta.Limit)
+	// Check if this is a free membership DAO
+	freeMembership := prj.Config.StakeMinAmt <= 0
+
+	if freeMembership {
+		// No intent required for free membership
+		depositAmount = 0
+	} else {
+		// --- get first valid transfer intent ---
+		ta := getFirstTransferAllow()
+		if ta == nil {
+			sdk.Abort("no valid transfer intent provided")
+		}
+		if ta.Token != prj.FundsAsset {
+			sdk.Abort(fmt.Sprintf("invalid asset, expected %s", AssetToString(prj.FundsAsset)))
+		}
+
+		if prj.Config.VotingSystem == VotingSystemDemocratic {
+			expectedStake := FloatToAmount(prj.Config.StakeMinAmt)
+			providedStake := FloatToAmount(ta.Limit)
+			if providedStake != expectedStake {
+				sdk.Abort(fmt.Sprintf("democratic projects require exactly %f %s", prj.Config.StakeMinAmt, ta.Token.String()))
+			}
+		}
+
+		if prj.Config.VotingSystem == VotingSystemStake {
+			requiredStake := FloatToAmount(prj.Config.StakeMinAmt)
+			providedStake := FloatToAmount(ta.Limit)
+			if providedStake < requiredStake {
+				sdk.Abort(fmt.Sprintf("stake too low, minimum %f %s required", prj.Config.StakeMinAmt, ta.Token.String()))
+			}
+		}
+
+		depositAmount = FloatToAmount(ta.Limit)
+		// draw the funds
+		sdk.HiveDraw(AmountToInt64(depositAmount), ta.Token)
+	}
+
 	newMember := Member{
 		Address:        callerAddr,
 		Stake:          depositAmount,
@@ -183,12 +210,11 @@ func JoinProject(projectID *string) *string {
 	saveStakeHistory(prj.ID, callerAddr, depositAmount, now, 0)
 	prj.MemberCount++
 	prj.StakeTotal += depositAmount
-	// draw the funds
-	mAmount := AmountToInt64(depositAmount)
-	sdk.HiveDraw(mAmount, ta.Token)
 	saveProjectFinance(prj)
 	emitJoinedEvent(prj.ID, AddressToString(callerAddr))
-	emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
+	if depositAmount > 0 {
+		emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), prj.FundsAsset.String(), true)
+	}
 	return strptr("joined")
 }
 

@@ -271,6 +271,16 @@ func createNftGatedProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
 	return parseCreatedID(t, res.Ret, "project")
 }
 
+// createFreeMembershipProject creates a DAO with no membership fee (stakeMin = 0).
+func createFreeMembershipProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
+	fields := defaultProjectFields()
+	fields[9] = "0" // stakeMin = 0
+	payload := strings.Join(fields, "|")
+	// No intent required for free membership
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), nil, "hive:someone", true, uint(1_000_000_000))
+	return parseCreatedID(t, res.Ret, "project")
+}
+
 // createSimpleProposal assembles a minimal non-payout proposal for helper cases.
 func createSimpleProposal(t *testing.T, ct *test_utils.ContractTest, projectID uint64, duration string) uint64 {
 	payload := strings.Join(simpleProposalFields(projectID, duration), "|")

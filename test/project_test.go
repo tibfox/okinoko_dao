@@ -71,6 +71,23 @@ func TestOwnerOnlyProjectCreation(t *testing.T) {
 // Project Creation Tests
 // =============================================================================
 
+// TestFreeMembershipProject verifies that DAOs with stakeMin=0 don't require an intent
+func TestFreeMembershipProject(t *testing.T) {
+	ct := SetupContractTest()
+
+	// Create a project with stakeMin = 0 (no intent required)
+	projectID := createFreeMembershipProject(t, ct)
+	if projectID != 0 {
+		t.Fatalf("expected project ID 0, got %d", projectID)
+	}
+
+	// Members can join without an intent too
+	fields := defaultProjectFields()
+	fields[9] = "0"
+	// Join the free DAO (no intent needed)
+	CallContract(t, ct, "project_join", PayloadString("0"), nil, "hive:someoneelse", true, uint(1_000_000_000))
+}
+
 // TestCreateProject checks the create project flow so we dont break it again.
 func TestCreateProject(t *testing.T) {
 	ct := SetupContractTest()
