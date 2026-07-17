@@ -206,7 +206,7 @@ func TestMaxProposalOptionsExceeded(t *testing.T) {
 	}
 	payload := strings.Join(proposalFields, "|")
 	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
-	if !strings.Contains(res.Ret, "cannot have more than 50 options") {
+	if !strings.Contains(res.Ret, "cannot have more than 40 options") {
 		t.Fatalf("expected max options rejection, got %q", res.Ret)
 	}
 }

@@ -225,6 +225,9 @@ func JoinProject(projectID *string) *string {
 func WhitelistMembers(payload *string) *string {
 	requireInitialized()
 	projectID, addresses := decodeWhitelistPayload(payload)
+	// NOTE: the direct owner path is intentionally uncapped (owner is trusted; see
+	// TestOwnerWhitelistAddNoLimit / TestOwnerWhitelistAdd100Addresses). Only the
+	// proposal meta path (whitelist_add) enforces MaxWhitelistAddresses.
 	prj := loadProject(projectID)
 	caller := getSenderAddress()
 	if !hasOwner(prj) {

@@ -40,7 +40,10 @@ func FloatToAmount(v float64) Amount {
 	if math.IsNaN(scaled) || math.IsInf(scaled, 0) {
 		sdk.Abort("invalid amount")
 	}
-	if scaled > float64(math.MaxInt64) || scaled < float64(math.MinInt64) {
+	// float64(math.MaxInt64) rounds UP to 2^63, which is not a valid int64. Use >=
+	// so a scaled value of exactly 2^63 is rejected instead of wrapping negative
+	// (native) or trapping (wasm i64.trunc). MinInt64 == -2^63 is exact, so keep <.
+	if scaled >= float64(math.MaxInt64) || scaled < float64(math.MinInt64) {
 		sdk.Abort("amount out of range")
 	}
 	return Amount(scaled)

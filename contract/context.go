@@ -68,7 +68,9 @@ func getFirstTransferAllow() *TransferAllow {
 			}
 			limitStr := intent.Args["limit"]
 			limit, err := strconv.ParseFloat(limitStr, 64)
-			if err != nil {
+			// ParseFloat accepts "-5"/"NaN" with a nil error; reject any
+			// non-positive or non-finite limit before it reaches HiveDraw.
+			if err != nil || !(limit > 0) {
 				sdk.Abort("invalid intent limit")
 			}
 			ta := &TransferAllow{
@@ -94,7 +96,7 @@ func getAllTransferAllows() []TransferAllow {
 			}
 			limitStr := intent.Args["limit"]
 			limit, err := strconv.ParseFloat(limitStr, 64)
-			if err != nil {
+			if err != nil || !(limit > 0) {
 				sdk.Abort("invalid intent limit")
 			}
 			transfers = append(transfers, TransferAllow{

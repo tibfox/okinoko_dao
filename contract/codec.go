@@ -405,7 +405,10 @@ func (r *binReader) readString() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if r.pos+int(l) > len(r.data) {
+	// Compare as uint64 before converting to int: on 32-bit wasm int(l) can wrap
+	// negative for a crafted length prefix, defeating the bounds check and panicking
+	// on the slice. Reject any length that can't fit in the remaining buffer.
+	if l > uint64(len(r.data)-r.pos) {
 		return "", errors.New("unexpected EOF")
 	}
 	s := string(r.data[r.pos : r.pos+int(l)])

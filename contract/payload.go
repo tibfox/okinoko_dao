@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"okinoko_dao/sdk"
 	"strconv"
 	"strings"
@@ -25,6 +26,12 @@ func decodeCreateProjectArgs(payload *string) *CreateProjectArgs {
 	}
 	if len(description) > MaxDescriptionLength {
 		sdk.Abort(fmt.Sprintf("project description exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
+	if len(get(13)) > MaxDescriptionLength {
+		sdk.Abort(fmt.Sprintf("project metadata exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
+	if len(get(16)) > MaxURLLength {
+		sdk.Abort(fmt.Sprintf("project URL exceeds maximum length of %d characters", MaxURLLength))
 	}
 	args := &CreateProjectArgs{
 		Name:        name,
@@ -98,6 +105,14 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 	payouts := parsePayoutField(get(6))
 	metaOutcome := parseMetadataField(get(7))
 	metadata := normalizeOptionalField(get(8))
+	// Bound the free-form metadata/URL like name/description: an unbounded blob
+	// bloats the proposal record that every vote/tally reloads (gas griefing).
+	if len(metadata) > MaxDescriptionLength {
+		sdk.Abort(fmt.Sprintf("proposal metadata exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
+	if len(get(9)) > MaxURLLength {
+		sdk.Abort(fmt.Sprintf("proposal URL exceeds maximum length of %d characters", MaxURLLength))
+	}
 	// ICC is the trailing field and its own grammar uses '|' internally
 	// (contract|function|payload|assets), so it spans every part from index 10
 	// onward. Rejoin them; reading only parts[10] truncated the entry and made the
@@ -193,6 +208,12 @@ func parseFloatField(val string, field string) float64 {
 	}
 	f, err := strconv.ParseFloat(val, 64)
 	if err != nil {
+		sdk.Abort(fmt.Sprintf("invalid %s", field))
+	}
+	// NaN/Inf slip past every range check (all NaN comparisons are false), which
+	// would brick governance (NaN threshold never passes), bypass quorum
+	// (uint64(NaN)==0), or make proposals free (NaN cost). Reject them here.
+	if math.IsNaN(f) || math.IsInf(f, 0) {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
 	}
 	return f
@@ -331,6 +352,10 @@ func parseMetadataField(val string) map[string]string {
 		}
 		key := strings.TrimSpace(split[0])
 		value := strings.TrimSpace(split[1])
+		// NOTE: unknown meta keys are intentionally tolerated (silently ignored at
+		// execute time) — see TestWhitelistProposalUnknownKeyIgnored. This is a
+		// forward-compat choice with a footgun (a typo'd governance directive
+		// no-ops); documented in FINDINGS-REVIEW.md rather than rejected here.
 		// Validate contract existence for NFT contract updates
 		if key == "update_membershipNFTContract" && value != "" {
 			if !contractExists(value) {
@@ -381,6 +406,14 @@ func normalizeProjectConfig(cfg *ProjectConfig) {
 	}
 	if cfg.ProposalCost < 0 {
 		cfg.ProposalCost = FallbackProposalCost
+	}
+	// A positive cost/stake that rounds below chain precision (AmountScale) would
+	// silently become 0 — free proposals / zero stake. Reject that misconfiguration.
+	if cfg.ProposalCost > 0 && FloatToAmount(cfg.ProposalCost) <= 0 {
+		sdk.Abort("proposal cost is below the minimum representable amount")
+	}
+	if cfg.StakeMinAmt > 0 && FloatToAmount(cfg.StakeMinAmt) <= 0 {
+		sdk.Abort("min stake is below the minimum representable amount")
 	}
 	cfg.MembershipNftPayloadFormat = normalizeMembershipPayloadFormat(cfg.MembershipNftPayloadFormat)
 }

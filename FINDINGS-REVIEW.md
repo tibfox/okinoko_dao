@@ -128,3 +128,88 @@ Poll payouts never execute; duplicate choices don't multiply weight; democratic
 cancel-executed; ownership transfer/remove_owner lifecycle; whitelist consumption on
 join; NFT gating; historical stake weight; kick-via-proposal refunds; and malformed
 payloads all abort cleanly.
+
+---
+
+## Rounds 4–8 (deep adversarial passes — 113 adversarial tests total, suite 259 green)
+
+Added `adversarial_round4..8_test.go`. Five more real bugs found and fixed:
+
+### C9 — HIGH: pause bypass via payout/ICC rider
+`allowsPauseMeta` only inspected `Outcome.Meta` (a single toggle_pause/owner key), so a
+`toggle_pause` proposal could also carry a `Payout`/`ICC` and execute it **while the
+project was frozen**. New `outcomeIsPauseSafe` requires no payout/ICC on any proposal
+created or executed under the pause exception. *(TestBreak_PauseBypassPayoutRider)*
+
+### C10 — MEDIUM: conflicting owner meta / map-iteration determinism
+A proposal could carry both `update_owner` and `remove_owner`; the final owner depended
+on Go map-iteration order (consensus hazard). Now rejected at creation, and the meta +
+ICC-asset loops iterate in **sorted order** so every validator applies them identically.
+*(TestBreak_ConflictingOwnerMetaRejected)*
+
+### C11 — MEDIUM: sub-milliunit cost/stake rounded to zero → free proposals
+A positive `ProposalCost`/`StakeMinAmt` below `1/AmountScale` (e.g. 0.0004) silently
+became 0. Rejected at config-normalize and via `update_proposalCost`. *(TestBreak_SubMilliunit*)*
+
+### C12 — MEDIUM: unvalidated intent limits
+`ParseFloat` accepts `-5`/`NaN` with no error, so a negative/NaN/zero `transfer.allow`
+limit reached `HiveDraw`. Now rejected (`!(limit > 0)`). Also `FloatToAmount`'s upper
+guard used `>` against `float64(MaxInt64)` (== 2^63), letting exactly 2^63 wrap/ trap;
+changed to `>=`. *(TestBreak_NegativeIntentLimitRejected, TestBreak_HugeDepositGracefulReject)*
+
+### C13 — MEDIUM: >45 proposal options crash the wasm
+`MaxProposalOptions` was 50, but a proposal with ~46+ options exhausts the wasm heap
+(nil-deref trap) during the per-option save loop — the advertised max was unreachable.
+Capped to **40** (proven safe with margin) so 41+ reject cleanly at parse.
+*(TestBreak_MaxOptionsRoundTrip)*  Also hardened `readString` against a 32-bit length-
+prefix truncation (defense-in-depth; not entrypoint-reachable).
+
+### Design notes (intended behaviour — surfaced, not changed)
+- **Kick is all-or-nothing** — a batch naming the owner/a payout-locked member aborts
+  entirely (TestKickMemberCannotKickOwner). Documented.
+- **Unknown meta keys are tolerated** (silently ignored) — TestWhitelistProposalUnknownKeyIgnored.
+  Footgun: a typo'd governance directive no-ops. Left per author's design.
+- **Direct owner whitelist add is uncapped** (TestOwnerWhitelistAddNoLimit); only the
+  proposal meta path enforces the 50 cap.
+- **Exact-50 threshold is inclusive** (`>=`) — set >50 (default 50.001) for strict majority.
+- **Free + democratic DAOs have no Sybil resistance**; **anyone can donate to any
+  treasury**; **ICC debits the full allowance** (a callee that under-draws strands the
+  difference); **kicked/departed voters keep their cast weight** (snapshot). All documented.
+
+### Confirmed robust (passing probes)
+Multi-asset treasury isolation & conservation; cross-project isolation (treasury, votes,
+IDs, membership enforcement via getMember); duplicate-asset draw reverts; codec round-trip
+fidelity (full outcome, colon/DID addresses, max name, many stake increments, empty name);
+poll-never-executes; fractional-amount precision; quorum ceil; toggle-pause round-trip.
+
+---
+
+## Review passes 9–10 (suite 280 green)
+
+Added `adversarial_round9_test.go` (NaN/Inf config) and `adversarial_round10_test.go`
+(URL/scheme + length bounds). Two more real bugs found and fixed:
+
+### C14 — HIGH: NaN/Inf floats bypassed all config validation
+`ParseFloat` accepts `NaN`/`Inf` with no error, and every NaN comparison is false, so a
+`NaN` threshold/quorum/cost slipped past every `< Min || > Max` range check:
+- **NaN threshold** → `weight/denom >= NaN` is always false → the DAO can never pass
+  anything (governance bricked).
+- **NaN quorum** → `uint64(ceil(NaN))` == 0 → quorum always met (bypass).
+- **NaN cost** → `cost > 0` is false → every proposal is free.
+
+Fixed: `parseFloatField` rejects NaN/Inf; threshold/quorum meta bounds rewritten in
+positive form (`!(v >= Min && v <= Max)`, which catches NaN); `update_proposalCost`
+guards NaN/Inf. Reachable at project creation **and** via governance meta updates.
+*(TestBreak_NaN{Threshold,Quorum,Cost}Rejected + ...ViaMetaRejected)*
+
+### C15 — LOW/MED: unbounded metadata/URL fields (gas-griefing / state bloat)
+Proposal/project name and description were length-capped, but the free-form
+**metadata** and **URL** fields were not — an oversized blob bloats the proposal record
+that every vote/tally reloads. Now bounded (`MaxDescriptionLength` / `MaxURLLength`) at
+create and via `update_url`. *(TestBreak_*LengthBounded)*
+
+### Confirmed robust (passing probes)
+Option URLs are https-only; non-owner and autonomous-project direct pause rejected;
+empty/whitespace payloads rejected on every entrypoint (no panic); negative/typo'd vote
+choices rejected; empty option text rejected; member-cache coherency (save updates,
+delete evicts); valid configs still work after the NaN guard.

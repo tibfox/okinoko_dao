@@ -33,8 +33,11 @@ const (
 	MaxOptionTextLength = 500
 	// MaxURLLength limits the size of URLs (for projects, proposals, and options).
 	MaxURLLength = 500
-	// MaxProposalOptions limits the number of options per proposal.
-	MaxProposalOptions = 50
+	// MaxProposalOptions limits the number of options per proposal. Each option is
+	// a separate state write plus an entry in the creation event; the wasm heap
+	// exhausts (nil-deref trap) around ~46 options, so this is capped well below
+	// that so the advertised maximum is always reachable, not just parseable.
+	MaxProposalOptions = 40
 	// MaxPayoutReceivers limits the number of payout entries per proposal.
 	MaxPayoutReceivers = 50
 	// MaxWhitelistAddresses limits the number of addresses per whitelist operation.

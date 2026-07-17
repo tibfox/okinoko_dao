@@ -27,7 +27,8 @@ func TestAddFundsZeroAmount(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	payload := fmt.Sprintf("%d|false", projectID)
 	res, _, _ := CallContract(t, ct, "project_funds", PayloadString(payload), transferIntent("0.000"), "hive:someone", false, uint(1_000_000_000))
-	if !strings.Contains(res.Ret, "invalid amount") {
+	// A zero-limit intent is now rejected up-front at intent validation.
+	if !strings.Contains(res.Ret, "invalid intent limit") && !strings.Contains(res.Ret, "invalid amount") {
 		t.Fatalf("expected zero amount rejection, got %q", res.Ret)
 	}
 }
