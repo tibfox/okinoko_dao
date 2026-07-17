@@ -66,6 +66,11 @@ func CreateProposal(payload *string) *string {
 	} else {
 		duration = prj.Config.ProposalDurationHours
 	}
+	// Cap duration so CreatedAt + duration*3600 cannot overflow int64 and push the
+	// deadline into the past (which would make the proposal tallyable immediately).
+	if duration > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	}
 
 	now := nowUnix()
 
@@ -169,7 +174,6 @@ func TallyProposal(proposalId *string) *string {
 
 	// find best option (on tie, higher index wins)
 	var totalVotes float64
-	var voterCount uint64
 	highestOptionId := -1
 	highestOptionValue := float64(0)
 
@@ -177,13 +181,16 @@ func TallyProposal(proposalId *string) *string {
 	for i, opt := range opts {
 		weight := AmountToFloat(opt.WeightTotal)
 		totalVotes += weight
-		voterCount += opt.VoterCount
 
 		if weight >= highestOptionValue {
 			highestOptionValue = weight
 			highestOptionId = i
 		}
 	}
+
+	// Distinct voters — a ballot counts once for quorum no matter how many options
+	// it selected (per-option VoterCount would over-count multi-select ballots).
+	voterCount := prpsl.VoterCount
 
 	// default to failed
 	prpsl.State = ProposalFailed
@@ -194,16 +201,24 @@ func TallyProposal(proposalId *string) *string {
 		quorumThreshold := uint64(math.Ceil(percentageOf(float64(prpsl.MemberCountSnapshot), prj.Config.QuorumPercent)))
 		// Check quorum
 		quorumMet := voterCount >= quorumThreshold
-		// Check threshold (fraction of total stake at creation)
-		denom := AmountToFloat(prpsl.StakeSnapshot)
+		// Check threshold. Democratic projects weigh each member as one unit, so the
+		// denominator is the member count at creation; stake projects use total stake.
+		var denom float64
+		if prj.Config.VotingSystem == VotingSystemDemocratic {
+			denom = float64(prpsl.MemberCountSnapshot)
+		} else {
+			denom = AmountToFloat(prpsl.StakeSnapshot)
+		}
 		thresholdMet := denom > 0 && (highestOptionValue/denom) >= (prj.Config.ThresholdPercent/100)
 
 		if quorumMet && thresholdMet {
 			prpsl.ResultOptionID = int32(highestOptionId)
 			if prpsl.IsPoll {
-				prpsl.State = ProposalClosed // polls remain advisory even if yes wins
-			} else {
-				prpsl.State = ProposalPassed // non-polls become executable actions
+				prpsl.State = ProposalClosed // polls stay advisory even if a side wins
+			} else if highestOptionId == ApproveOptionIndex {
+				// Only an APPROVE ("yes") win executes the outcome. A "no" win — or any
+				// non-approve option — is a rejection and must NOT run payouts/meta/ICC.
+				prpsl.State = ProposalPassed
 				execReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
 				prpsl.ExecutableAt = execReady
 				emitProposalExecutionDelayEvent(prpsl.ProjectID, prpsl.ID, execReady)
@@ -324,6 +339,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if v < MinProposalDurationHours {
 						sdk.Abort(fmt.Sprintf("proposal duration must be at least %d hour(s)", MinProposalDurationHours))
 					}
+					if v > MaxDurationHours {
+						sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalDuration", fmt.Sprintf("%d", prj.Config.ProposalDurationHours), value)
 					prj.Config.ProposalDurationHours = v
 					metaChanged = true
@@ -333,6 +351,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid execution delay update")
 					}
+					if v > MaxDurationHours {
+						sdk.Abort(fmt.Sprintf("execution delay must not exceed %d hours", MaxDurationHours))
+					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "executionDelay", fmt.Sprintf("%d", prj.Config.ExecutionDelayHours), value)
 					prj.Config.ExecutionDelayHours = v
 					metaChanged = true
@@ -341,6 +362,9 @@ func ExecuteProposal(proposalID *string) *string {
 					v, err := strconv.ParseUint(value, 10, 64)
 					if err != nil {
 						sdk.Abort("invalid leave cooldown update")
+					}
+					if v > MaxDurationHours {
+						sdk.Abort(fmt.Sprintf("leave cooldown must not exceed %d hours", MaxDurationHours))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "leaveCooldown", fmt.Sprintf("%d", prj.Config.LeaveCooldownHours), value)
 					prj.Config.LeaveCooldownHours = v
@@ -408,6 +432,7 @@ func ExecuteProposal(proposalID *string) *string {
 					stateChanged = true
 				case "update_owner":
 					newOwnerAddr := AddressFromString(value)
+					validateAddress(newOwnerAddr)
 					if _, exists := loadMember(prj.ID, newOwnerAddr); !exists {
 						sdk.Abort("new owner must be a member")
 					}

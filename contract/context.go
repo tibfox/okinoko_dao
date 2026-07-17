@@ -67,7 +67,7 @@ func getFirstTransferAllow() *TransferAllow {
 				sdk.Abort("invalid intent asset")
 			}
 			limitStr := intent.Args["limit"]
-			limit, err := strconv.ParseFloat(limitStr, 32)
+			limit, err := strconv.ParseFloat(limitStr, 64)
 			if err != nil {
 				sdk.Abort("invalid intent limit")
 			}

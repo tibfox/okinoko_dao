@@ -32,7 +32,7 @@ func setTreasuryBalance(projectID uint64, asset sdk.Asset, amount Amount) {
 // addTreasuryFunds adds funds to a specific asset in the project treasury.
 func addTreasuryFunds(projectID uint64, asset sdk.Asset, amount Amount) {
 	current := getTreasuryBalance(projectID, asset)
-	setTreasuryBalance(projectID, asset, current+amount)
+	setTreasuryBalance(projectID, asset, safeAddAmount(current, amount))
 }
 
 // removeTreasuryFunds removes funds from a specific asset in the project treasury.

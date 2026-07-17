@@ -109,15 +109,21 @@ func proposalOptionKey(id uint64, idx uint32) string {
 }
 
 // memberStakeHistoryKey stores a member's stake history entry at a specific increment.
-// Key format: kMemberStakeHistory|projectID|address|increment
+// Key format: kMemberStakeHistory|projectID|increment|address
 // Value format: {stake}_{timestamp}
+//
+// The address is placed LAST (after the fixed-width projectID and increment) so
+// that every field preceding the variable-length address is fixed width. If the
+// address sat in the middle, two members whose (address, increment) byte runs
+// overlapped by length could collide onto the same key (e.g. addr "ab"+inc vs
+// addr "a"+different inc). All fixed-width prefixes make each key unambiguous.
 func memberStakeHistoryKey(projectID uint64, addr sdk.Address, increment uint64) string {
 	addrStr := AddressToString(addr)
-	buf := make([]byte, 0, 1+8+len(addrStr)+8)
+	buf := make([]byte, 0, 1+8+8+len(addrStr))
 	buf = append(buf, kMemberStakeHistory)
 	buf = packU64LE(projectID, buf)
-	buf = append(buf, addrStr...)
 	buf = packU64LE(increment, buf)
+	buf = append(buf, addrStr...)
 	return string(buf)
 }
 

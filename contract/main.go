@@ -31,9 +31,12 @@ func ContractInit(payload *string) *string {
 
 	publicCreation := permission == "public"
 
-	// Store contract config with caller as owner
+	// Store contract config with caller as owner. The owner is encoded into a
+	// pipe-delimited config record, so guard against any delimiter bytes.
+	owner := getSenderAddress()
+	validateAddress(owner)
 	cfg := ContractConfig{
-		Owner:                 getSenderAddress(),
+		Owner:                 owner,
 		ProjectCreationPublic: publicCreation,
 	}
 	saveContractConfig(&cfg)

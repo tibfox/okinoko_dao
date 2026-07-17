@@ -39,10 +39,18 @@ const (
 	MaxPayoutReceivers = 50
 	// MaxWhitelistAddresses limits the number of addresses per whitelist operation.
 	MaxWhitelistAddresses = 50
+	// MaxAddressLength bounds any user-supplied address string. Hive addresses
+	// ("hive:<username>") are short; this cap keeps forged keys/records from
+	// bloating state.
+	MaxAddressLength = 128
 	// MaxKickAddresses limits the number of addresses per kick_member operation.
 	MaxKickAddresses = 50
 	// MinProposalDurationHours enforces a minimum voting period.
 	MinProposalDurationHours = 1
+	// MaxDurationHours caps proposal duration, execution delay and leave cooldown.
+	// Any value * 3600 must stay well within int64, so this also prevents the
+	// deadline/execution-time integer overflow. 10 years is far beyond any real use.
+	MaxDurationHours = 87600
 	// MinThresholdPercent is the minimum allowed threshold percentage.
 	MinThresholdPercent = 1.0
 	// MaxThresholdPercent is the maximum allowed threshold percentage.
@@ -138,6 +146,11 @@ const (
 
 const (
 	ProposalStateUnspecified ProposalState = 0
+	// ApproveOptionIndex is the "yes"/approve slot of the default [no, yes] ballot.
+	// Only actionable (non-poll) proposals — which always use that default ballot —
+	// may execute their outcome, and only when this option wins.
+	ApproveOptionIndex = 1
+
 	ProposalActive           ProposalState = 1
 	ProposalClosed           ProposalState = 2
 	ProposalPassed           ProposalState = 3

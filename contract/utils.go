@@ -103,6 +103,48 @@ func AddressFromString(s string) sdk.Address { return sdk.Address(s) }
 // AddressToString turns the wrapped type back into the underlying string.
 func AddressToString(a sdk.Address) string { return a.String() }
 
+// validateAddress rejects user-supplied addresses that could forge state keys
+// or corrupt the delimiter-based records this contract encodes. State keys pack
+// the address as their trailing (variable-length) field, and several payload /
+// event encodings split on the bytes below; a well-formed address
+// ("hive:<username>") never contains them. Colons are intentionally allowed
+// because they are part of the address itself. Call this at every point where an
+// address first enters from an untrusted payload.
+func validateAddress(addr sdk.Address) {
+	s := addr.String()
+	if s == "" {
+		sdk.Abort("address required")
+	}
+	if len(s) > MaxAddressLength {
+		sdk.Abort("address exceeds maximum length")
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// Reject the structural delimiters ('|' state keys/config, ';' and ','
+		// record separators) and any control/whitespace byte (<= 0x20).
+		if c == '|' || c == ';' || c == ',' || c <= ' ' {
+			sdk.Abort("invalid character in address")
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Overflow-safe Amount Math
+// -----------------------------------------------------------------------------
+
+// safeAddAmount adds two scaled Amounts and aborts on int64 overflow rather than
+// silently wrapping into a negative balance (which would bypass the
+// insufficient-funds guards downstream).
+func safeAddAmount(a, b Amount) Amount {
+	if b > 0 && a > maxAmount-b {
+		sdk.Abort("amount overflow")
+	}
+	if b < 0 && a < minAmount-b {
+		sdk.Abort("amount underflow")
+	}
+	return a + b
+}
+
 // AssetFromString wraps a ticker string so type checking keeps us honest.
 func AssetFromString(s string) sdk.Asset { return sdk.Asset(s) }
 

@@ -245,6 +245,7 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeVarInt(int64(prpsl.ResultOptionID))
 	w.writeInt64(prpsl.ExecutableAt)
 	w.writeString(prpsl.URL)
+	w.writeVarUint(prpsl.VoterCount)
 	return w.bytes()
 }
 
@@ -915,24 +916,9 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 			return nil, err
 		}
 	}
-	// Skip old voters list if present (backwards compatible)
+	// Distinct voter count (added for correct quorum accounting).
 	if r.pos < len(r.data) {
-		voterCount, err := r.readVarUint()
-		if err != nil {
-			return nil, err
-		}
-		// Skip voter addresses
-		for i := uint64(0); i < voterCount; i++ {
-			_, err := r.readString()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	// Skip old total voted weight if present (backwards compatible)
-	if r.pos < len(r.data) {
-		_, err = r.readAmount()
-		if err != nil {
+		if prpsl.VoterCount, err = r.readVarUint(); err != nil {
 			return nil, err
 		}
 	}

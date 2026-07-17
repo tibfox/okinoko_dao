@@ -98,7 +98,15 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 	payouts := parsePayoutField(get(6))
 	metaOutcome := parseMetadataField(get(7))
 	metadata := normalizeOptionalField(get(8))
-	iccCalls := parseICCField(get(10))
+	// ICC is the trailing field and its own grammar uses '|' internally
+	// (contract|function|payload|assets), so it spans every part from index 10
+	// onward. Rejoin them; reading only parts[10] truncated the entry and made the
+	// whole ICC feature unreachable (even the documented example failed to parse).
+	iccRaw := ""
+	if len(parts) > 10 {
+		iccRaw = strings.Join(parts[10:], "|")
+	}
+	iccCalls := parseICCField(iccRaw)
 
 	var outcome *ProposalOutcome
 	if len(payouts) > 0 || len(metaOutcome) > 0 || len(iccCalls) > 0 {
@@ -358,8 +366,18 @@ func normalizeProjectConfig(cfg *ProjectConfig) {
 	if cfg.ProposalDurationHours < MinProposalDurationHours {
 		cfg.ProposalDurationHours = MinProposalDurationHours
 	}
+	// Upper-bound the time fields so value*3600 cannot overflow int64.
+	if cfg.ProposalDurationHours > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	}
+	if cfg.ExecutionDelayHours > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("execution delay must not exceed %d hours", MaxDurationHours))
+	}
 	if cfg.LeaveCooldownHours <= 0 {
 		cfg.LeaveCooldownHours = FallbackLeaveCooldownHours
+	}
+	if cfg.LeaveCooldownHours > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("leave cooldown must not exceed %d hours", MaxDurationHours))
 	}
 	if cfg.ProposalCost < 0 {
 		cfg.ProposalCost = FallbackProposalCost
@@ -421,7 +439,11 @@ func parsePayoutField(val string) []PayoutEntry {
 		}
 		asset = AssetFromString(assetStr)
 		amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
+		if amount <= 0 {
+			sdk.Abort("payout amount must be positive")
+		}
 		addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
+		validateAddress(addr)
 
 		payouts = append(payouts, PayoutEntry{Address: addr, Amount: amount, Asset: asset})
 	}
@@ -457,7 +479,9 @@ func parseAddressList(val string) []sdk.Address {
 			continue
 		}
 		seen[part] = struct{}{}
-		addresses = append(addresses, AddressFromString(part))
+		addr := AddressFromString(part)
+		validateAddress(addr)
+		addresses = append(addresses, addr)
 	}
 	if len(addresses) == 0 {
 		return nil
