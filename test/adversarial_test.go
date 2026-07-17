@@ -26,12 +26,14 @@ import (
 const lateTS = "2025-09-05T00:00:00" // well past a 1h proposal deadline
 
 // rawCallAt invokes the contract WITHOUT the success/failure assertion baked
-// into CallContract, so a test can inspect the raw outcome itself.
-func rawCallAt(ct *test_utils.ContractTest, action string, payload []byte, intents []contracts.Intent, authUser, timestamp, nonce string) stateEngine.TxResult {
+// into CallContract, so a test can inspect the raw outcome itself. The result's
+// Ret is normalized to carry the abort message on failure (the host now returns
+// it in ErrMsg), so existing `res.Ret` substring assertions keep working.
+func rawCallAt(ct *test_utils.ContractTest, action string, payload []byte, intents []contracts.Intent, authUser, timestamp, nonce string) test_utils.ContractTestCallResult {
 	if timestamp == "" {
 		timestamp = defaultTimestamp
 	}
-	result, _, _ := ct.Call(stateEngine.TxVscCallContract{
+	result := ct.Call(stateEngine.TxVscCallContract{
 		Caller: authUser,
 		Self: stateEngine.TxSelf{
 			TxId:                 fmt.Sprintf("%s-%s-%s-tx", action, authUser, nonce),
@@ -48,6 +50,9 @@ func rawCallAt(ct *test_utils.ContractTest, action string, payload []byte, inten
 		RcLimit:    100000,
 		Intents:    intents,
 	})
+	if !result.Success && result.Ret == "" {
+		result.Ret = result.ErrMsg
+	}
 	return result
 }
 
@@ -62,7 +67,7 @@ func createStakeProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
 }
 
 // voteRaw casts a vote for arbitrary choice string and returns raw success.
-func voteRaw(ct *test_utils.ContractTest, proposalID uint64, user, choices, nonce string) stateEngine.TxResult {
+func voteRaw(ct *test_utils.ContractTest, proposalID uint64, user, choices, nonce string) test_utils.ContractTestCallResult {
 	return rawCallAt(ct, "proposals_vote", []byte(strconv.Quote(fmt.Sprintf("%d|%s", proposalID, choices))), nil, user, defaultTimestamp, nonce)
 }
 

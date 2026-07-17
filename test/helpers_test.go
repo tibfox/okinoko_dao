@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	contract_session "vsc-node/modules/contract/session"
 	"vsc-node/lib/test_utils"
 	"vsc-node/modules/db/vsc/contracts"
 	ledgerDb "vsc-node/modules/db/vsc/ledger"
@@ -108,12 +109,12 @@ func CleanBadgerDB() {
 }
 
 // CallContract executes a contract action and asserts basic success
-func CallContract(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint) (stateEngine.TxResult, uint, map[string][]string) {
+func CallContract(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	return callContractWithTimestamp(t, ct, action, payload, intents, authUser, expectedResult, maxGas, defaultTimestamp)
 }
 
 // CallContractAt executes a call but lets tests override the timestamp for expiry checks.
-func CallContractAt(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (stateEngine.TxResult, uint, map[string][]string) {
+func CallContractAt(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	if timestamp == "" {
 		timestamp = defaultTimestamp
 	}
@@ -121,12 +122,12 @@ func CallContractAt(t *testing.T, ct *test_utils.ContractTest, action string, pa
 }
 
 // callContractWithTimestamp performs the real invocation, logging gas usage and asserting outcome.
-func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (stateEngine.TxResult, uint, map[string][]string) {
+func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action string, payload json.RawMessage, intents []contracts.Intent, authUser string, expectedResult bool, maxGas uint, timestamp string) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	if timestamp == "" {
 		timestamp = defaultTimestamp
 	}
 	fmt.Println(action)
-	result, gasUsed, logs := ct.Call(stateEngine.TxVscCallContract{
+	result := ct.Call(stateEngine.TxVscCallContract{
 		Caller: authUser,
 
 		Self: stateEngine.TxSelf{
@@ -144,8 +145,14 @@ func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action
 		RcLimit:    100000,
 		Intents:    intents,
 	})
+	// The host now returns the abort message in ErrMsg; mirror it into Ret so
+	// existing `res.Ret` substring assertions keep working.
+	if !result.Success && result.Ret == "" {
+		result.Ret = result.ErrMsg
+	}
+	gasUsed := result.GasUsed
 
-	PrintLogs(logs)
+	PrintLogs(result.Logs)
 	PrintErrorIfFailed(result)
 	fmt.Printf("return msg: %s\n", result.Ret)
 	fmt.Printf("gas used: %d\n", gasUsed)
@@ -159,22 +166,20 @@ func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action
 	} else {
 		assert.False(t, result.Success, "Contract action did not fail (as expected)")
 	}
-	return result, gasUsed, logs
+	return result, gasUsed, result.Logs
 }
 
 // PrintLogs prints all logs from a contract call
-func PrintLogs(logs map[string][]string) {
-	for key, values := range logs {
-		for _, v := range values {
-			fmt.Printf("[%s] %s\n", key, v)
-		}
+func PrintLogs(logs map[string]contract_session.LogOutput) {
+	for key, v := range logs {
+		fmt.Printf("[%s] %v\n", key, v)
 	}
 }
 
 // PrintErrorIfFailed prints error if the contract call failed
-func PrintErrorIfFailed(result stateEngine.TxResult) {
+func PrintErrorIfFailed(result test_utils.ContractTestCallResult) {
 	if !result.Success {
-		fmt.Println(result.Err)
+		fmt.Println(result.ErrMsg)
 	}
 }
 
@@ -219,7 +224,12 @@ func transferIntentWithToken(limit string, token string) []contracts.Intent {
 
 // containsNFTGateMessage returns true if the error indicates NFT gating blocked access.
 func containsNFTGateMessage(msg string) bool {
-	return strings.Contains(msg, "membership nft not owned") || strings.Contains(msg, "contract contract:mocknft does not exist")
+	// The NFT gate blocks the join because the mock NFT contract call fails. Node
+	// versions word that failure differently ("... does not exist" vs "contract not
+	// found"), so accept any of them.
+	return strings.Contains(msg, "membership nft not owned") ||
+		strings.Contains(msg, "contract contract:mocknft does not exist") ||
+		strings.Contains(msg, "contract not found")
 }
 
 // joinProjectMember wraps the repeated join call to keep tests terse.
