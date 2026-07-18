@@ -224,3 +224,21 @@ nothing — voters believed a change took effect that silently didn't. Now
 `parseMetadataField` rejects any key not in `isKnownMetaKey` at proposal creation.
 Flipped the author's `TestWhitelistProposalUnknownKeyIgnored` (and two round-7
 design-note tests) to assert rejection. Suite: 280 green on current prod node.
+
+---
+
+## End-to-end lifecycle scenarios (test/e2e_scenarios_test.go)
+
+Seven complete-DAO scenarios driven through the real wasm + state-processing/ledger/RC
+engine (single-node), asserting balances and state at every step. Suite: 287 green.
+- **A** Democratic grants DAO: grant payout → lower quorum → kick+refund → transfer ownership.
+- **B** Stake-weighted treasury: whale passes alone, minority fails, departed whale refunded.
+- **C** Whitelist-gated: owner + governance whitelisting, gate enforced.
+- **D** Multi-asset + pause: HIVE+HBD treasury, payout blocked while paused, unpause via
+  toggle_pause proposal, multi-asset payout executes both legs.
+- **E** Execution delay + poll: action respects the delay; a poll never executes its rider.
+- **F** Autonomous governance: remove_owner → still governs treasury → re-own.
+- **G** Proposal cost: owner-cancel refunds the creator; creator self-cancel does not.
+
+NB: this exercises the full contract execution path end-to-end but is still single-node —
+a multi-node consensus devnet run remains the last mile before mainnet.
