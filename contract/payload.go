@@ -352,10 +352,13 @@ func parseMetadataField(val string) map[string]string {
 		}
 		key := strings.TrimSpace(split[0])
 		value := strings.TrimSpace(split[1])
-		// NOTE: unknown meta keys are intentionally tolerated (silently ignored at
-		// execute time) — see TestWhitelistProposalUnknownKeyIgnored. This is a
-		// forward-compat choice with a footgun (a typo'd governance directive
-		// no-ops); documented in FINDINGS-REVIEW.md rather than rejected here.
+		// Reject unknown meta keys up front. The execute-time switch has no default
+		// case, so a typo'd/unknown key would silently no-op while the proposal still
+		// "passes" — voters would believe a governance change was enacted that never
+		// happened. Fail fast at creation instead.
+		if !isKnownMetaKey(key) {
+			sdk.Abort(fmt.Sprintf("unknown meta action: %s", key))
+		}
 		// Validate contract existence for NFT contract updates
 		if key == "update_membershipNFTContract" && value != "" {
 			if !contractExists(value) {
@@ -365,6 +368,21 @@ func parseMetadataField(val string) map[string]string {
 		meta[key] = value
 	}
 	return meta
+}
+
+// isKnownMetaKey lists every meta action ExecuteProposal actually handles.
+func isKnownMetaKey(key string) bool {
+	switch key {
+	case "update_threshold", "update_quorum", "update_proposalDuration",
+		"update_executionDelay", "update_leaveCooldown", "update_proposalCost",
+		"update_membershipNFT", "update_membershipNFTContract",
+		"update_membershipNFTContractFunction", "update_membershipNFTPayload",
+		"update_proposalCreatorRestriction", "update_url", "update_owner",
+		"remove_owner", "toggle_pause", "update_whitelistOnly",
+		"whitelist_add", "whitelist_remove", "kick_member":
+		return true
+	}
+	return false
 }
 
 // normalizeProjectConfig ensures configs always have sane fallbacks before persisting.

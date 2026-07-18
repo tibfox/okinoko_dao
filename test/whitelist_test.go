@@ -164,13 +164,17 @@ func TestWhitelistProposalRemoveMissingAddress(t *testing.T) {
 }
 
 // TestWhitelistProposalUnknownKeyIgnored ensures unknown meta keys are silently skipped.
-func TestWhitelistProposalUnknownKeyIgnored(t *testing.T) {
+// TestWhitelistProposalUnknownKeyRejected: an unknown meta key is now rejected at
+// creation (previously it was silently ignored, letting a typo'd governance
+// directive pass while enacting nothing).
+func TestWhitelistProposalUnknownKeyRejected(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
-	propID := createPollProposal(t, ct, projectID, "1", "", "unknown_key=value")
-	voteForProposal(t, ct, propID, "hive:someone")
-	CallContractAt(t, ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
-	CallContractAt(t, ct, "proposal_execute", PayloadUint64(propID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T01:00:00")
+	fields := []string{strconv.FormatUint(projectID, 10), "p", "d", "1", "", "0", "", "unknown_key=value", ""}
+	res, _, _ := CallContract(t, ct, "proposal_create", PayloadString(strings.Join(fields, "|")), transferIntent("1.000"), "hive:someone", false, uint(1_000_000_000))
+	if !strings.Contains(res.Ret, "unknown meta action") {
+		t.Fatalf("expected unknown-meta rejection, got %q", res.Ret)
+	}
 }
 
 // TestWhitelistOwnerOnlyAccess ensures owner-only whitelist operations.

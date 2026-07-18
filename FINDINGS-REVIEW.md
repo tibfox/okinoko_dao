@@ -167,10 +167,9 @@ prefix truncation (defense-in-depth; not entrypoint-reachable).
 ### Design notes (intended behaviour — surfaced, not changed)
 - **Kick is all-or-nothing** — a batch naming the owner/a payout-locked member aborts
   entirely (TestKickMemberCannotKickOwner). Documented.
-- **Unknown meta keys are tolerated** (silently ignored) — TestWhitelistProposalUnknownKeyIgnored.
-  Footgun: a typo'd governance directive no-ops. Left per author's design.
 - **Direct owner whitelist add is uncapped** (TestOwnerWhitelistAddNoLimit); only the
-  proposal meta path enforces the 50 cap.
+  proposal meta path enforces the 50 cap. Left as-is: measured safe to 2000+ entries
+  (no wasm crash, owner pays gas). Optional generous ceiling could be added.
 - **Exact-50 threshold is inclusive** (`>=`) — set >50 (default 50.001) for strict majority.
 - **Free + democratic DAOs have no Sybil resistance**; **anyone can donate to any
   treasury**; **ICC debits the full allowance** (a callee that under-draws strands the
@@ -213,3 +212,15 @@ Option URLs are https-only; non-owner and autonomous-project direct pause reject
 empty/whitespace payloads rejected on every entrypoint (no panic); negative/typo'd vote
 choices rejected; empty option text rejected; member-cache coherency (save updates,
 delete evicts); valid configs still work after the NaN guard.
+
+---
+
+## Follow-up: unknown-meta-key rejection (was a documented footgun, now fixed)
+
+### C16 — MED: unknown/typo'd governance meta keys were silently ignored
+The execute-time meta `switch` has no default case, so a proposal with a typo'd key
+(e.g. `update_treshold=60`) passed quorum/threshold and "executed" while enacting
+nothing — voters believed a change took effect that silently didn't. Now
+`parseMetadataField` rejects any key not in `isKnownMetaKey` at proposal creation.
+Flipped the author's `TestWhitelistProposalUnknownKeyIgnored` (and two round-7
+design-note tests) to assert rejection. Suite: 280 green on current prod node.

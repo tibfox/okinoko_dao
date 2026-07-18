@@ -27,35 +27,28 @@ func createProposalAt(t *testing.T, ct *test_utils.ContractTest, pid uint64, dur
 	return id
 }
 
-// R7-1: DESIGN NOTE / FOOTGUN — an unknown / typo'd meta key is silently tolerated
-// (the proposal passes and "executes" as a no-op for that key). This matches the
-// author's TestWhitelistProposalUnknownKeyIgnored. Flagged: a typo'd governance
-// directive enacts nothing while voters believe it did.
-func TestBreak_UnknownMetaKeyTolerated_DesignNote(t *testing.T) {
+// R7-1: an unknown / typo'd meta key is rejected at creation (so a typo'd
+// governance directive can't pass while silently enacting nothing).
+func TestBreak_UnknownMetaKeyRejected(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
-	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	// typo: "update_treshold" — silently ignored, proposal still passes+executes
-	propID := createPollProposal(t, ct, pid, "1", "", "update_treshold=60")
-	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v1").Success)
-	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
-	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
-	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.True(t, res.Success, "unknown-meta tolerance changed (now rejected?)")
+	// typo: "update_treshold" must be rejected up front
+	res := rawCallAt(ct, "proposal_create",
+		PayloadString(fmt.Sprintf("%d|p|d|1||0||update_treshold=60|", pid)),
+		transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
+	assert.False(t, res.Success, "a typo'd meta key was accepted (silent no-op risk)")
+	assert.Contains(t, res.Ret, "unknown meta action", "wrong rejection reason: %s", res.Ret)
 }
 
-// R7-2: a KNOWN meta key mixed with an unknown one still applies the known one
-// (the unknown is ignored) — the valid update takes effect.
-func TestBreak_MixedKnownUnknownMetaAppliesKnown(t *testing.T) {
+// R7-2: a KNOWN meta key mixed with an unknown one is rejected wholesale (the
+// unknown key fails the proposal rather than being silently dropped).
+func TestBreak_MixedKnownUnknownMetaRejected(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
-	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	propID := createPollProposal(t, ct, pid, "1", "", "update_quorum=40.0;bogus_key=1")
-	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v1").Success)
-	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
-	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
-	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.True(t, res.Success, "a valid+unknown meta mix failed to execute: %s", res.Ret)
+	res := rawCallAt(ct, "proposal_create",
+		PayloadString(fmt.Sprintf("%d|p|d|1||0||update_quorum=40.0;bogus_key=1|", pid)),
+		transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
+	assert.False(t, res.Success, "a valid+unknown meta mix was accepted")
 }
 
 // R7-3: a max-length (128 char) project name round-trips; 129 is rejected.
