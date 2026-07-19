@@ -54,7 +54,7 @@ func TestBreak_EmptyBallotDoesNotInflateQuorum(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "empty ballots met quorum for a 1-real-voter proposal")
+	assertAborts(t, exec, "proposal is failed", "empty ballots met quorum for a 1-real-voter proposal")
 	assert.Equal(t, before, after, "payout executed on quorum inflated by empty ballots")
 }
 
@@ -88,7 +88,7 @@ func TestBreak_PollWithPayoutCannotExecute(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "a poll executed its payout")
+	assertAborts(t, exec, "proposal is closed", "a poll executed its payout")
 	assert.Equal(t, before, after, "poll paid out despite being advisory")
 }
 
@@ -108,7 +108,7 @@ func TestBreak_DuplicateChoicesNotMultiplied(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "duplicate choices multiplied a sub-threshold vote over the line")
+	assertAborts(t, exec, "proposal is failed", "duplicate choices multiplied a sub-threshold vote over the line")
 	assert.Equal(t, before, after, "duplicate-choice weight inflation paid out")
 }
 
@@ -155,7 +155,7 @@ func TestBreak_AddStakeInDemocraticRejected(t *testing.T) {
 	pid := createDefaultProject(t, ct) // democratic
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
 	res := rawCallAt(ct, "project_funds", PayloadString(fmt.Sprintf("%d|true", pid)), transferIntent("5.000"), "hive:someoneelse", defaultTimestamp, "f")
-	assert.False(t, res.Success, "democratic project accepted a stake increase")
+	assertAborts(t, res, "cannot add member stake > StakeMinAmt in democratic systems", "democratic project accepted a stake increase")
 }
 
 // R2-8: democratic threshold math — a 2/3 majority passes.
@@ -189,7 +189,7 @@ func TestBreak_DemocraticMinorityFails(t *testing.T) {
 	before := hiveBal(ct, "hive:outsider")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:outsider")
-	assert.False(t, exec.Success, "a 1/3 minority passed a >50% threshold")
+	assertAborts(t, exec, "proposal is failed", "a 1/3 minority passed a >50%% threshold")
 	assert.Equal(t, before, after, "minority vote paid out")
 }
 
@@ -206,7 +206,7 @@ func TestBreak_StakeNoMajorityDoesNotExecute(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "a NO-majority stake proposal executed")
+	assertAborts(t, exec, "proposal is failed", "a NO-majority stake proposal executed")
 	assert.Equal(t, before, after, "NO-majority stake proposal paid out")
 }
 
@@ -226,7 +226,7 @@ func TestBreak_ICCOnlyCreatorCanExecute(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	// someoneelse (not the creator) must not be able to execute the ICC proposal.
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someoneelse", lateTS, "e")
-	assert.False(t, res.Success, "a non-creator executed an ICC proposal")
+	assertAborts(t, res, "only proposal creator can execute proposals with inter-contract calls", "a non-creator executed an ICC proposal")
 }
 
 // R2-12: quorum must be an exact-boundary gate — one voter short must fail.
@@ -246,6 +246,6 @@ func TestBreak_QuorumExactBoundary(t *testing.T) {
 	before := hiveBal(ct, "hive:outsider")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:outsider")
-	assert.False(t, exec.Success, "quorum met with one voter short of the requirement")
+	assertAborts(t, exec, "proposal is failed", "quorum met with one voter short of the requirement")
 	assert.Equal(t, before, after, "sub-quorum proposal paid out")
 }

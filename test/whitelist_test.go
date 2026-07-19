@@ -14,6 +14,7 @@ import (
 // TestWhitelistDoesNotBypassNFT ensures entries do not override nft requirements.
 func TestWhitelistDoesNotBypassNFT(t *testing.T) {
 	ct := SetupContractTest()
+	registerMock(ct)
 	projectID := createNftGatedProject(t, ct)
 	whitelistPayload := fmt.Sprintf("%d|%s", projectID, "hive:someoneelse")
 	CallContract(t, ct, "project_whitelist_add", PayloadString(whitelistPayload), nil, "hive:someone", true, uint(1_000_000_000))
@@ -224,9 +225,10 @@ func TestWhitelistToggleInvalidFlag(t *testing.T) {
 // TestWhitelistAndNFTEnforced ensures whitelist + NFT enforcement combination works.
 func TestWhitelistAndNFTEnforced(t *testing.T) {
 	ct := SetupContractTest()
+	registerMock(ct)
 	fields := defaultProjectFields()
-	fields[10] = "contract:mocknft"
-	fields[11] = "owns"
+	fields[10] = MockID
+	fields[11] = "nft_none"
 	fields[12] = "1"
 	fields[len(fields)-1] = "1"
 	payload := strings.Join(fields, "|")

@@ -25,7 +25,7 @@ func TestBreak_MultiProjectTreasuryIsolation(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "project A payout succeeded by draining project B's treasury")
+	assertAborts(t, res, "insufficient hive funds in treasury", "project A payout succeeded by draining project B's treasury")
 }
 
 // R8-2: a member of project A cannot vote on project B's proposal.
@@ -36,7 +36,7 @@ func TestBreak_MemberOfACannotVoteOnB(t *testing.T) {
 	joinProjectMember(t, ct, pidA, "hive:someoneelse") // member of A only
 	propB := createSimpleProposal(t, ct, pidB, "1")    // proposal in B
 	res := rawCallAt(ct, "proposals_vote", PayloadString(fmt.Sprintf("%d|1", propB)), nil, "hive:someoneelse", defaultTimestamp, "v")
-	assert.False(t, res.Success, "a non-member of project B voted on B's proposal")
+	assertAborts(t, res, "hive:someoneelse is not a member", "a non-member of project B voted on B's proposal")
 	assert.Contains(t, res.Ret, "not a member", "wrong rejection: %s", res.Ret)
 }
 
@@ -63,7 +63,7 @@ func TestBreak_MultiProjectMemberIndependent(t *testing.T) {
 	rawCallAt(ct, "project_leave", PayloadUint64(pidA), nil, "hive:someoneelse", lateTS, "l2")
 	// still a member of B: a second join must be rejected as "already a member"
 	res := rawCallAt(ct, "project_join", PayloadUint64(pidB), transferIntent("3.000"), "hive:someoneelse", lateTS, "j")
-	assert.False(t, res.Success, "leaving project A also removed membership from project B")
+	assertAborts(t, res, "already a member", "leaving project A also removed membership from project B")
 	assert.Contains(t, res.Ret, "already a member", "unexpected: %s", res.Ret)
 }
 
@@ -88,7 +88,7 @@ func TestBreak_WhitelistMetaAddressCap(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "51-address whitelist_add via proposal meta executed (over cap)")
+	assertAborts(t, res, "whitelist_add cannot exceed 50 addresses per proposal", "51-address whitelist_add via proposal meta executed (over cap)")
 }
 
 // R8-6: a proposal duration below the project's configured minimum is rejected.
@@ -101,7 +101,7 @@ func TestBreak_DurationBelowProjectMinRejected(t *testing.T) {
 	// proposal with duration 1 (< 5) must be rejected
 	fields := simpleProposalFields(pid, "1")
 	bad := rawCallAt(ct, "proposal_create", PayloadString(joinPipe(fields)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, bad.Success, "a proposal shorter than the project minimum duration was accepted")
+	assertAborts(t, bad, "Duration must be higher or equal to project defined proposal duration", "a proposal shorter than the project minimum duration was accepted")
 }
 
 // R8-7: transferring ownership to oneself succeeds and leaves the owner in place.

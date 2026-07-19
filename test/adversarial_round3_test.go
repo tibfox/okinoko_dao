@@ -35,7 +35,7 @@ func TestBreak_ICCMalformedRejected(t *testing.T) {
 	pid := createDefaultProject(t, ct)
 	fields := []string{strconv.FormatUint(pid, 10), "icc", "d", "1", "", "0", "", "", "meta", "", "onlycontract"}
 	res := rawCallAt(ct, "proposal_create", PayloadString(joinPipe(fields)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a 1-component ICC entry was accepted")
+	assertAborts(t, res, "invalid ICC entry format (need contract|function|payload[|assets])", "a 1-component ICC entry was accepted")
 }
 
 // R3-3: a proposal that sets ownership to a non-member must fail at execution.
@@ -48,7 +48,7 @@ func TestBreak_UpdateOwnerToNonMemberRejected(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "ownership was transferred to a non-member via proposal")
+	assertAborts(t, res, "new owner must be a member", "ownership was transferred to a non-member via proposal")
 }
 
 // R3-4: after a project becomes autonomous (remove_owner), owner-only ops must fail.
@@ -63,7 +63,7 @@ func TestBreak_RemoveOwnerDisablesOwnerOps(t *testing.T) {
 	assert.True(t, rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e").Success)
 	// former owner can no longer pause
 	res := rawCallAt(ct, "project_pause", PayloadUint64(pid), nil, "hive:someone", lateTS, "p")
-	assert.False(t, res.Success, "former owner retained privileges after remove_owner")
+	assertAborts(t, res, "project is autonomous - use proposal to pause/unpause", "former owner retained privileges after remove_owner")
 }
 
 // R3-5: transferring ownership to a non-member must be rejected.
@@ -71,7 +71,7 @@ func TestBreak_TransferOwnershipToNonMemberRejected(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
 	res := rawCallAt(ct, "project_transfer", PayloadString(fmt.Sprintf("%d|hive:member2", pid)), nil, "hive:someone", defaultTimestamp, "x")
-	assert.False(t, res.Success, "ownership transferred to a non-member")
+	assertAborts(t, res, "new owner must be a member", "ownership transferred to a non-member")
 }
 
 // R3-6: a whitelist entry is consumed on join; re-joining after leaving requires a
@@ -86,15 +86,36 @@ func TestBreak_WhitelistConsumedRequiresReAdd(t *testing.T) {
 	rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", lateTS, "l2")
 	// rejoin without re-whitelisting must fail
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", lateTS, "j")
-	assert.False(t, res.Success, "rejoined a whitelist-only project without a fresh approval")
+	assertAborts(t, res, "whitelist approval required", "rejoined a whitelist-only project without a fresh approval")
 }
 
 // R3-7: an NFT-gated project rejects joins from non-holders.
 func TestBreak_NFTGateBlocksJoin(t *testing.T) {
 	ct := SetupContractTest()
+	registerMock(ct)
 	pid := createNftGatedProject(t, ct)
+	// The gate must reject via the DAO's OWN check. This previously asserted
+	// "contract not found" — a host error from pointing at an unregistered contract —
+	// so the gate logic was never actually exercised.
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", defaultTimestamp, "j")
-	assert.False(t, res.Success, "NFT gate did not block a non-holder")
+	assertAborts(t, res, "membership nft not owned", "NFT gate did not block a non-holder")
+}
+
+// R3-7b: the mirror — a caller the NFT contract reports as an OWNER may join.
+// Without this, "the gate blocks everyone" would pass just as well as a correct
+// gate; it is what distinguishes enforcement from an unconditional refusal.
+func TestBreak_NFTGateAdmitsHolder(t *testing.T) {
+	ct := SetupContractTest()
+	registerMock(ct)
+	fields := defaultProjectFields()
+	fields[10] = MockID
+	fields[11] = "nft_owned" // reports "[1]" -> caller owns the NFT
+	fields[12] = "1"
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(strings.Join(fields, "|")),
+		transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	pid := parseCreatedID(t, res.Ret, "project")
+	join := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", defaultTimestamp, "j")
+	assert.True(t, join.Success, "NFT holder was refused membership: %s", join.Ret)
 }
 
 // R3-8: an active proposal cannot be cancelled twice.
@@ -104,7 +125,7 @@ func TestBreak_DoubleCancelRejected(t *testing.T) {
 	propID := createSimpleProposal(t, ct, pid, "1")
 	assert.True(t, rawCallAt(ct, "proposal_cancel", PayloadUint64(propID), nil, "hive:someone", defaultTimestamp, "c1").Success)
 	res := rawCallAt(ct, "proposal_cancel", PayloadUint64(propID), nil, "hive:someone", defaultTimestamp, "c2")
-	assert.False(t, res.Success, "a proposal was cancelled twice")
+	assertAborts(t, res, "proposal not active", "a proposal was cancelled twice")
 }
 
 // R3-9: an executed proposal cannot be cancelled.
@@ -119,7 +140,7 @@ func TestBreak_CancelExecutedProposalRejected(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	assert.True(t, rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e").Success)
 	res := rawCallAt(ct, "proposal_cancel", PayloadUint64(propID), nil, "hive:someone", lateTS, "c")
-	assert.False(t, res.Success, "an executed proposal was cancelled")
+	assertAborts(t, res, "proposal not active", "an executed proposal was cancelled")
 }
 
 // R3-10: with execution delay 0, a passed proposal is executable immediately after
@@ -158,7 +179,7 @@ func TestBreak_StakeIncreaseAfterProposalNotCounted(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "post-creation stake top-up boosted voting weight over threshold")
+	assertAborts(t, exec, "proposal is failed", "post-creation stake top-up boosted voting weight over threshold")
 	assert.Equal(t, before, after, "stake-topup vote inflation paid out")
 }
 
@@ -218,7 +239,7 @@ func TestBreak_MalformedPayloadsAbortCleanly(t *testing.T) {
 	}
 	for i, c := range cases {
 		res := rawCallAt(ct, c.action, PayloadString(c.payload), nil, "hive:someone", defaultTimestamp, "m"+strconv.Itoa(i))
-		assert.False(t, res.Success, "%s accepted malformed payload %q", c.action, c.payload)
+		assertAbortsAny(t, res, "%s accepted malformed payload %q", c.action, c.payload)
 		assert.NotContains(t, strings.ToLower(res.Ret), "panic", "%s panicked on %q", c.action, c.payload)
 	}
 }

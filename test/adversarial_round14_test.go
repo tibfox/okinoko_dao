@@ -21,14 +21,15 @@ import (
 // them passes if the call fails for an unrelated reason — a wrong field count, a
 // missing intent, a typo'd address — so they can silently stop testing the thing
 // they name. Prefer this helper for new negative tests.
-func assertAborts(t *testing.T, res test_utils.ContractTestCallResult, wantMsg, what string) {
+func assertAborts(t *testing.T, res test_utils.ContractTestCallResult, wantMsg, what string, args ...interface{}) {
 	t.Helper()
-	assert.False(t, res.Success, "%s: call unexpectedly succeeded", what)
+	label := fmt.Sprintf(what, args...)
+	assert.False(t, res.Success, "%s: call unexpectedly succeeded", label)
 	if res.Success {
 		return
 	}
 	assert.Contains(t, res.Ret, wantMsg,
-		"%s: rejected, but for the wrong reason (got %q, want it to contain %q)", what, res.Ret, wantMsg)
+		"%s: rejected, but for the wrong reason (got %q, want it to contain %q)", label, res.Ret, wantMsg)
 }
 
 // R14-1: re-voting must not inflate the distinct-voter count used for quorum.
@@ -60,7 +61,7 @@ func TestBreak_RevotingDoesNotInflateQuorum(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	before := hiveBal(ct, "hive:outsider")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, exec.Success, "one member re-voting satisfied a two-voter quorum")
+	assertAborts(t, exec, "proposal is failed", "one member re-voting satisfied a two-voter quorum")
 	assert.Equal(t, before, hiveBal(ct, "hive:outsider"), "payout executed on an inflated quorum")
 }
 
@@ -176,6 +177,23 @@ func TestBreak_OverflowLiteralRejected(t *testing.T) {
 		f[i] = "1e999" // legal decimal syntax; overflows to +Inf
 		res := rawCallAt(ct, "project_create", PayloadString(strings.Join(f, "|")),
 			transferIntent("1.000"), "hive:someone", defaultTimestamp, "of"+tc.idx)
-		assertAborts(t, res, tc.want, "overflow literal in "+tc.field)
+		assertAborts(t, res, tc.want, "overflow literal in %s", tc.field)
 	}
+}
+
+// assertAbortsAny is for negative sites whose exact message legitimately varies
+// (malformed-payload fuzz loops, or a branch that is currently unreachable). It
+// still enforces the property that matters most: the call was rejected BY THE
+// CONTRACT, with a real abort message — not by a host-level error such as
+// "contract not found", which would mean the test never reached its subject.
+func assertAbortsAny(t *testing.T, res test_utils.ContractTestCallResult, what string, args ...interface{}) {
+	t.Helper()
+	label := fmt.Sprintf(what, args...)
+	assert.False(t, res.Success, "%s: call unexpectedly succeeded", label)
+	if res.Success {
+		return
+	}
+	assert.Contains(t, res.Ret, "msg:",
+		"%s: rejected by the HOST, not by the contract (got %q) — the test never reached its subject",
+		label, res.Ret)
 }

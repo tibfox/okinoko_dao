@@ -15,7 +15,7 @@ func TestBreak_SubMilliunitCostRejected(t *testing.T) {
 	ct := SetupContractTest()
 	f := []string{"dao", "desc", "0", "50.001", "50.001", "1", "0", "10", "0.0004", "1", "", "", "", "", "1", "", "", ""}
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(f)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a sub-milliunit proposal cost (0.0004) was accepted -> free proposals")
+	assertAborts(t, res, "proposal cost is below the minimum representable amount", "a sub-milliunit proposal cost (0.0004) was accepted -> free proposals")
 }
 
 // R5-2: a sub-milliunit min-stake (rounds to 0) must be rejected.
@@ -23,7 +23,7 @@ func TestBreak_SubMilliunitStakeMinRejected(t *testing.T) {
 	ct := SetupContractTest()
 	f := []string{"dao", "desc", "1", "50.001", "50.001", "1", "0", "10", "1", "0.0004", "", "", "", "", "1", "", "", ""}
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(f)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a sub-milliunit min stake (0.0004) was accepted")
+	assertAborts(t, res, "min stake is below the minimum representable amount", "a sub-milliunit min stake (0.0004) was accepted")
 }
 
 // R5-3: raising proposal cost to a sub-milliunit value via governance is rejected.
@@ -36,7 +36,7 @@ func TestBreak_SubMilliunitCostViaMetaRejected(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "sub-milliunit proposal cost accepted via meta update")
+	assertAborts(t, res, "proposal cost is below the minimum representable amount", "sub-milliunit proposal cost accepted via meta update")
 }
 
 // R5-4: a negative intent limit must be rejected (must not reach HiveDraw).
@@ -44,7 +44,7 @@ func TestBreak_NegativeIntentLimitRejected(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createStakeProject(t, ct)
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntentWithToken("-5.000", "hive"), "hive:member2", defaultTimestamp, "j")
-	assert.False(t, res.Success, "a negative intent limit was accepted")
+	assertAborts(t, res, "invalid intent limit", "a negative intent limit was accepted")
 }
 
 // R5-5: a NaN intent limit must be rejected.
@@ -52,7 +52,7 @@ func TestBreak_NaNIntentLimitRejected(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createStakeProject(t, ct)
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntentWithToken("NaN", "hive"), "hive:member2", defaultTimestamp, "j")
-	assert.False(t, res.Success, "a NaN intent limit was accepted")
+	assertAborts(t, res, "invalid intent limit", "a NaN intent limit was accepted")
 }
 
 // R5-6: a zero intent limit must be rejected.
@@ -60,7 +60,7 @@ func TestBreak_ZeroIntentLimitRejected(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createStakeProject(t, ct)
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntentWithToken("0", "hive"), "hive:member2", defaultTimestamp, "j")
-	assert.False(t, res.Success, "a zero intent limit was accepted")
+	assertAborts(t, res, "invalid intent limit", "a zero intent limit was accepted")
 }
 
 // R5-7: an astronomically large deposit aborts gracefully (out of range) rather
@@ -70,7 +70,7 @@ func TestBreak_HugeDepositGracefulReject(t *testing.T) {
 	pid := createStakeProject(t, ct)
 	// ~2^63 scaled: token value near 9.223e15 -> *1000 near 2^63.
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntentWithToken("9223372036854776", "hive"), "hive:member2", defaultTimestamp, "j")
-	assert.False(t, res.Success, "an out-of-range deposit was accepted")
+	assertAborts(t, res, "amount out of range", "an out-of-range deposit was accepted")
 }
 
 // R5-8: fractional amounts (within milliunit precision) survive a payout exactly.
@@ -104,7 +104,7 @@ func TestBreak_DefaultThresholdRejectsExactTie(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "an exact 50/50 tie passed the 50.001% threshold")
+	assertAborts(t, exec, "proposal is failed", "an exact 50/50 tie passed the 50.001%% threshold")
 	assert.Equal(t, before, after)
 }
 
@@ -160,7 +160,7 @@ func TestBreak_TieResolvesToRejection(t *testing.T) {
 
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, exec.Success, "a dead-even vote was treated as approval")
+	assertAborts(t, exec, "proposal is failed", "a dead-even vote was treated as approval")
 	assert.Equal(t, before, hiveBal(ct, "hive:someoneelse"), "tie paid out the treasury")
 }
 
@@ -181,6 +181,6 @@ func TestBreak_QuorumFractionalPercentCeil(t *testing.T) {
 	before := hiveBal(ct, "hive:outsider")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:outsider")
-	assert.False(t, exec.Success, "1 of 3 voters met a 33.334%% (2-voter) quorum")
+	assertAborts(t, exec, "proposal is failed", "1 of 3 voters met a 33.334%% (2-voter) quorum")
 	assert.Equal(t, before, after)
 }

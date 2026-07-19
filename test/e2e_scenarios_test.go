@@ -91,7 +91,7 @@ func TestE2E_StakeWeightedTreasuryDAO(t *testing.T) {
 	o1 := hiveBal(ct, "hive:outsider")
 	p2 := createPollProposal(t, ct, pid, "1", "hive:outsider:5.000:hive", "")
 	res := passAndExecuteAt(t, ct, p2, lateTS, "hive:someoneelse")
-	assert.False(t, res.Success, "a 28% minority passed a >50% threshold")
+	assertAborts(t, res, "proposal is failed", "a 28%% minority passed a >50%% threshold")
 	assert.Equal(t, o1, hiveBal(ct, "hive:outsider"), "minority vote paid out")
 
 	// --- P3: the whale leaves and is refunded its full 100.000 stake ---
@@ -178,7 +178,7 @@ func TestE2E_ExecutionDelayAndPoll(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(p), nil, "hive:someone", "2025-09-03T02:00:00", "t")
 	// execute BEFORE the 24h delay -> rejected
 	early := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", p)), nil, "hive:someone", "2025-09-03T05:00:00", "early")
-	assert.False(t, early.Success, "proposal executed before its execution delay elapsed")
+	assertAborts(t, early, "execution delay until 2025-09-04T01:00:00Z", "proposal executed before its execution delay elapsed")
 	// execute AFTER the delay -> succeeds
 	before := hiveBal(ct, "hive:someoneelse")
 	late := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", p)), nil, "hive:someone", "2025-09-05T00:00:00", "late")
@@ -193,7 +193,7 @@ func TestE2E_ExecutionDelayAndPoll(t *testing.T) {
 	assert.True(t, voteRaw(ct, pollID, "hive:someoneelse", "0", "pv2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(pollID), nil, "hive:someone", "2025-09-06T00:00:00", "pt")
 	pollExec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", pollID)), nil, "hive:someone", "2025-09-07T00:00:00", "px")
-	assert.False(t, pollExec.Success, "a poll executed its payout rider")
+	assertAborts(t, pollExec, "proposal is closed", "a poll executed its payout rider")
 }
 
 // ============================================================================

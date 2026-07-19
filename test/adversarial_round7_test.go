@@ -36,7 +36,7 @@ func TestBreak_UnknownMetaKeyRejected(t *testing.T) {
 	res := rawCallAt(ct, "proposal_create",
 		PayloadString(fmt.Sprintf("%d|p|d|1||0||update_treshold=60|", pid)),
 		transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a typo'd meta key was accepted (silent no-op risk)")
+	assertAborts(t, res, "unknown meta action: update_treshold", "a typo'd meta key was accepted (silent no-op risk)")
 	assert.Contains(t, res.Ret, "unknown meta action", "wrong rejection reason: %s", res.Ret)
 }
 
@@ -48,7 +48,7 @@ func TestBreak_MixedKnownUnknownMetaRejected(t *testing.T) {
 	res := rawCallAt(ct, "proposal_create",
 		PayloadString(fmt.Sprintf("%d|p|d|1||0||update_quorum=40.0;bogus_key=1|", pid)),
 		transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a valid+unknown meta mix was accepted")
+	assertAborts(t, res, "unknown meta action: bogus_key", "a valid+unknown meta mix was accepted")
 }
 
 // R7-3: a max-length (128 char) project name round-trips; 129 is rejected.
@@ -60,7 +60,7 @@ func TestBreak_ProjectNameLengthBoundary(t *testing.T) {
 	assert.True(t, ok.Success, "128-char name rejected: %s", ok.Ret)
 	f[0] = strings.Repeat("a", 129)
 	bad := rawCallAt(ct, "project_create", PayloadString(joinPipe(f)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "b")
-	assert.False(t, bad.Success, "129-char name accepted")
+	assertAborts(t, bad, "project name exceeds maximum length of 128 characters", "129-char name accepted")
 }
 
 // R7-4: a proposal at the maximum option count (40) round-trips and is creatable

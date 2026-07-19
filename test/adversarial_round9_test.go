@@ -59,7 +59,7 @@ func TestBreak_NaNThresholdViaMetaRejected(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "NaN threshold set via governance (would brick the DAO)")
+	assertAborts(t, res, "threshold must be between 1% and 100%", "NaN threshold set via governance (would brick the DAO)")
 }
 
 // R9-7: NaN quorum via governance is rejected at execution.
@@ -72,7 +72,7 @@ func TestBreak_NaNQuorumViaMetaRejected(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "NaN quorum set via governance (quorum bypass)")
+	assertAborts(t, res, "quorum must be between 1% and 100%", "NaN quorum set via governance (quorum bypass)")
 }
 
 // R9-8: NaN cost via governance is rejected at execution.
@@ -85,7 +85,7 @@ func TestBreak_NaNCostViaMetaRejected(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "NaN proposal cost set via governance (free proposals)")
+	assertAborts(t, res, "invalid proposal cost update", "NaN proposal cost set via governance (free proposals)")
 }
 
 // R9-9: a NaN vote-intent limit is rejected (already guarded in context; confirms it).
@@ -94,7 +94,7 @@ func TestBreak_NaNStakeMinRejected(t *testing.T) {
 	// stake project with NaN min stake must be rejected at creation.
 	f := []string{"dao", "desc", "1", "50.001", "50.001", "1", "0", "10", "1", "NaN", "", "", "", "", "1", "", "", ""}
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(f)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "NaN min stake accepted")
+	assertAborts(t, res, "invalid min stake", "NaN min stake accepted")
 }
 
 // R9-10: a NaN cost that WOULD have been set is provably absent — a valid DAO after

@@ -121,7 +121,7 @@ func TestBreak_ExecuteTwiceRejectedWithMock(t *testing.T) {
 	assert.True(t, rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e1").Success)
 	assert.Equal(t, before+1000, hiveBal(ct, "hive:outsider"))
 	second := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e2")
-	assert.False(t, second.Success, "a proposal executed twice")
+	assertAborts(t, second, "proposal already executed", "a proposal executed twice")
 	assert.Equal(t, before+1000, hiveBal(ct, "hive:outsider"), "second execute paid out again")
 }
 
@@ -169,7 +169,7 @@ func TestBreak_ICCCalleeCannotOverdrawAllowance(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "callee drew more than the granted transfer.allow limit")
+	assertAborts(t, res, "amount (5000) is over remaining token limit (1000)", "callee drew more than the granted transfer.allow limit")
 }
 
 // R12-5: DELEGATION (deliberate product behaviour). A member calling a contract
@@ -256,7 +256,7 @@ func TestBreak_ICCGrantsCannotOverspendTreasury(t *testing.T) {
 	assert.True(t, first.Success, "first 1.000 grant should fit in a 1.500 treasury: %s", first.Ret)
 
 	second := iccDrawProposal(t, ct, pid, "1.0", 1000, "b")
-	assert.False(t, second.Success,
+	assertAborts(t, second, "insufficient hive funds in treasury for ICC",
 		"treasury overspent: a second 1.000 ICC grant succeeded against a 1.500 treasury")
 }
 
@@ -288,7 +288,7 @@ func TestBreak_ICCUndrawnAllowanceIsStranded(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "tp")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "ep")
 
-	assert.False(t, res.Success,
+	assertAborts(t, res, "insufficient hive funds in treasury",
 		"treasury was debited only the amount DRAWN (0.400), not the amount GRANTED (1.000) — "+
 			"if this now passes, the stranding limitation was fixed and this test should be inverted")
 	t.Logf("confirmed: undrawn allowance is stranded — treasury debited the full 1.000 grant, "+

@@ -164,7 +164,7 @@ func callContractWithTimestamp(t *testing.T, ct *test_utils.ContractTest, action
 	if expectedResult {
 		assert.True(t, result.Success, "Contract action failed with "+result.Ret)
 	} else {
-		assert.False(t, result.Success, "Contract action did not fail (as expected)")
+		assertAbortsAny(t, result, "Contract action did not fail (as expected)")
 	}
 	return result, gasUsed, result.Logs
 }
@@ -223,13 +223,15 @@ func transferIntentWithToken(limit string, token string) []contracts.Intent {
 }
 
 // containsNFTGateMessage returns true if the error indicates NFT gating blocked access.
+// containsNFTGateMessage requires the DAO's OWN gate to have rejected the join.
+//
+// It used to also accept "contract not found" / "does not exist", because the
+// fixture pointed at a membership contract that was never registered — so the join
+// died at the host and the gate logic was never reached. The fixture now uses the
+// real companion contract (mockcontract's nft_none export returns "[]", i.e. not
+// owned), so only the contract's own message is acceptable.
 func containsNFTGateMessage(msg string) bool {
-	// The NFT gate blocks the join because the mock NFT contract call fails. Node
-	// versions word that failure differently ("... does not exist" vs "contract not
-	// found"), so accept any of them.
-	return strings.Contains(msg, "membership nft not owned") ||
-		strings.Contains(msg, "contract contract:mocknft does not exist") ||
-		strings.Contains(msg, "contract not found")
+	return strings.Contains(msg, "membership nft not owned")
 }
 
 // joinProjectMember wraps the repeated join call to keep tests terse.
@@ -271,10 +273,13 @@ func createWhitelistProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
 }
 
 // createNftGatedProject configures membership contract requirements for whitelist tests.
+// createNftGatedProject gates membership on the companion contract's nft_none
+// export, which reports "[]" (NOT owned) for every caller — so a join must be
+// rejected by the DAO's own gate. The caller must registerMock(ct) first.
 func createNftGatedProject(t *testing.T, ct *test_utils.ContractTest) uint64 {
 	fields := defaultProjectFields()
-	fields[10] = "contract:mocknft"
-	fields[11] = "owns"
+	fields[10] = MockID
+	fields[11] = "nft_none"
 	fields[12] = "1"
 	payload := strings.Join(fields, "|")
 	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))

@@ -62,7 +62,7 @@ func TestBreak_SameBlockJoinCannotVote(t *testing.T) {
 	}
 	for i, m := range sybils {
 		res := voteRaw(ct, propID, m, "1", fmt.Sprintf("v%d", i))
-		assert.False(t, res.Success, "same-block joiner %s was allowed to vote", m)
+		assertAborts(t, res, "proposal was created before joining the project", "same-block joiner %s was allowed to vote", m)
 		assert.Contains(t, res.Ret, "created before joining",
 			"rejected for the wrong reason: %s", res.Ret)
 	}
@@ -204,11 +204,11 @@ func TestBreak_EmptyEntityIDRejected(t *testing.T) {
 	assert.Equal(t, uint64(0), propID, "test assumes the target is proposal 0")
 
 	vote := rawCallAt(ct, "proposals_vote", PayloadString("|1"), nil, "hive:someone", defaultTimestamp, "v")
-	assert.False(t, vote.Success, "empty proposal id silently voted on proposal 0")
+	assertAborts(t, vote, "proposal id is required", "empty proposal id silently voted on proposal 0")
 
 	funds := rawCallAt(ct, "project_funds", PayloadString("|false"), transferIntent("1.000"),
 		"hive:someone", defaultTimestamp, "f")
-	assert.False(t, funds.Success, "empty project id silently deposited into project 0")
+	assertAborts(t, funds, "project id is required", "empty project id silently deposited into project 0")
 }
 
 // R13-7: numeric fields must reject Go literal syntax that stores a value other
@@ -220,7 +220,7 @@ func TestBreak_NumericLiteralSyntaxRejected(t *testing.T) {
 		f[3] = bad // threshold
 		res := rawCallAt(ct, "project_create", PayloadString(strings.Join(f, "|")),
 			transferIntent("1.000"), "hive:someone", defaultTimestamp, "c"+bad)
-		assert.False(t, res.Success, "threshold %q was accepted", bad)
+		assertAborts(t, res, "invalid threshold", "threshold %q was accepted", bad)
 	}
 }
 
@@ -298,7 +298,7 @@ func TestBreak_ListFieldsAreBounded(t *testing.T) {
 		choices = append(choices, "1")
 	}
 	res := voteRaw(ct, propID, "hive:someone", strings.Join(choices, ","), "v")
-	assert.False(t, res.Success, "a 1000-choice ballot was accepted")
+	assertAborts(t, res, "too many choices", "a 1000-choice ballot was accepted")
 
 	// oversize outcome-meta blob
 	big := []string{strconv.FormatUint(pid, 10), "big-meta", "d", "1", "", "0", "",
@@ -340,7 +340,7 @@ func TestBreak_VoterCannotWithdrawBeforeTally(t *testing.T) {
 	// (lateTS is 2025-09-05; the 48h deadline from 2025-09-03 is 2025-09-05T00:00 —
 	// use a timestamp strictly inside the voting window.)
 	early := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", "2025-09-04T00:00:00", "l2")
-	assert.False(t, early.Success, "voter withdrew stake while the proposal they voted on was still running")
+	assertAborts(t, early, "stake locked until 2025-09-05T00:00:00Z: you voted on a proposal that is still running", "voter withdrew stake while the proposal they voted on was still running")
 	assert.Contains(t, early.Ret, "stake locked until", "blocked for the wrong reason: %s", early.Ret)
 
 	// Once the voting period is over the stake is released.
