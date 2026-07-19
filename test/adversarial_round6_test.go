@@ -176,8 +176,14 @@ func TestBreak_ICCInsufficientTreasuryAborts(t *testing.T) {
 // clean single-node harness reproduction (needs an under-drawing callee), so this
 // is a placeholder marker asserting the ICC balance-check path exists.
 func TestBreak_ICCAllowanceDebitNote(t *testing.T) {
-	// The insufficient-treasury guard (R6-9) proves the ICC deduction path runs
-	// against the treasury counter; the stranding caveat is the allowance-vs-actual
-	// gap noted in the review. Nothing to assert dynamically here.
-	t.Skip("documented ICC allowance-debit limitation; see FINDINGS-REVIEW.md")
+	// Superseded: this used to be a documentation-only skip because the
+	// allowance-vs-actual gap needed a real callee contract to observe. Round 12
+	// added one (mockcontract/), so the behaviour is now asserted for real:
+	//
+	//   TestBreak_ICCUndrawnAllowanceIsStranded    — the treasury is debited the full
+	//     GRANT even when the callee draws less; the remainder is stranded (safe
+	//     direction: under-spend, never over-spend).
+	//   TestBreak_ICCGrantsCannotOverspendTreasury — repeated grants cannot exceed
+	//     the treasury (the dangerous direction).
+	t.Skip("superseded by TestBreak_ICCUndrawnAllowanceIsStranded (round 12)")
 }
