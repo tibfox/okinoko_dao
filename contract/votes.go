@@ -184,6 +184,14 @@ func VoteProposal(payload *string) *string {
 		saveProposalOption(prpsl.ID, idx32, option)
 	}
 
+	// Voting re-arms the leave cooldown: a pre-armed "exit requested" would
+	// otherwise let a member vote and withdraw their stake in the very next call
+	// (vote-and-run), which the cooldown exists to prevent.
+	if member.ExitRequested != 0 {
+		member.ExitRequested = 0
+		saveMember(prj.ID, &member)
+	}
+
 	// Track DISTINCT voters for quorum (a voter selecting multiple options must
 	// count once, not once per option). Only a brand-new ballot bumps the count.
 	if prevVote == nil {

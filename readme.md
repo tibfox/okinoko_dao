@@ -192,7 +192,7 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 | Action / Export | Payload | Description | Return |
 |-----------------|---------|-------------|--------|
 | `contract_init` | `public` or `owner-only` | **Must be called first.** Initializes the contract with the caller as owner. `public` allows anyone to create projects, `owner-only` restricts project creation to the contract owner. | `"initialized with public/owner-only project creation"` |
-| `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?` | Creates a new project with multi-asset treasury support. Name max 128 chars, description max 512 chars. Membership payload defaults to `{nft}\|{caller}` and must include both placeholders. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
+| `project_create` | `name\|description\|votingSystem\|threshold\|quorum\|proposalDuration\|executionDelay\|leaveCooldown\|proposalCost\|stakeMin\|membershipContract?\|membershipFn?\|membershipNftId?\|proposalMetadata?\|proposalCreatorRestriction\|membershipPayloadFormat?\|projectUrl?\|whitelistOnly?` | Creates a new project with multi-asset treasury support. Name max 128 chars, description max 512 chars. Membership payload must contain both `{nft}` and `{caller}`; if it is omitted or invalid the contract falls back to its default internally (the default cannot be written literally here, because `|` is the field separator). `whitelistOnly` is the 18th field: `1` = join requires whitelist approval. Proposal creator restriction `1` = members only, `0` = public. | ID of the new project (`msg:<id>`) |
 | `project_join` | `projectId` | Joins a project using the caller's first `transfer.allow` intent. Aborts if paused or the caller fails NFT membership checks. | `"joined"` |
 | `project_leave` | `projectId` | Starts/finishes the leave cooldown. Blocks when payouts targeting the member are still active. **Owners must transfer ownership before leaving.** | `"exit requested"` / `"exit finished"` |
 | `project_funds` | `projectId\|toStakeFlag` | Adds funds either to the treasury (`false`, accepts any asset) or increases the caller's stake (`true`, requires base membership asset, stake systems only). | `"funds added"` |
@@ -219,8 +219,21 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 - `update_proposalCreatorRestriction=<0|1>`  
 - `update_url=<https://example.com>` (empty clears it)
 - `update_owner=<memberAccount>`
+- `remove_owner=1` — makes the project permanently **autonomous** (ownerless). This disables pause,
+  whitelist management, ownership transfer and owner-cancel. Governance continues to work via proposals.
 - `toggle_pause=1`
 - `kick_member=<address1,address2,...>` - Remove members and refund their stake (cannot kick owner or members with active payouts). Existing votes on active proposals remain valid.
+
+**Additional enforced limits (not otherwise listed above):**
+
+- A proposal's `duration` may not be *shorter* than the project's `proposalDuration`, and may not exceed 87600 hours (10 years).
+- `threshold` and `quorum` must be within `[1, 100]`; `NaN`/`Inf` are rejected.
+- A positive `proposalCost`/`stakeMin` that rounds below 0.001 is rejected.
+- Max 40 proposal options, 50 payout receivers, 50 kick addresses per proposal, 50 whitelist addresses per
+  proposal (the owner's direct `project_whitelist_add` is intentionally uncapped), address max 128 chars.
+- Unknown `meta` keys are rejected at proposal creation (a typo fails loudly rather than silently doing nothing).
+- On a tie between options the higher index wins; for the default `[no, yes]` ballot that means a tie approves.
+- `proposal_tally` produces `passed`, `closed` (polls) or `failed` — never `cancelled`.
 
 Only `toggle_pause` proposals may be created and executed while the project is paused, ensuring the DAO can unfreeze itself even if the owner disappears.
 
@@ -328,9 +341,10 @@ The contract logs concise events for indexing:
 |-------|-------------|---------|
 | `dc` (`dc\|id:<project>\|by:<creator>`) | Project created (full snapshot including metadata + url) | `dc\|id:1\|by:hive:alice\|name:Demo\|description:test\|metadata:\|url:https://dao.example` |
 | `mj` / `ml` (`mj\|id:<project>\|by:<member>`) | Member joined / left | `mj\|id:1\|by:hive:bob` |
-| `af` / `rf` (`af\|id:<project>\|by:<member>\|am:<float>\|as:<asset>\|s:<bool>`) | Funds added/removed (stake or treasury) | `af\|id:1\|by:hive:bob\|am:1.000000\|as:hive\|s:true` |
-| `pc` (`pc\|id:<proposal>\|by:<creator>`) | Proposal created (includes metadata + url snapshot + options with URLs) | `pc\|id:5\|by:hive:alice\|name:Idea\|description:something\|metadata:\|url:https://example\|duration:24\|isPoll:true\|options:Yes;No:https://docs.example.com/why-no\|payouts:\|outcomeMeta:` |
-| `ps` (`ps\|id:<proposal>\|s:<state>`) | Proposal state changed (`active`, `passed`, `executed`, `failed`, `cancelled`) | `ps\|id:5\|s:passed` |
+| `af` (`af\|id:<project>\|by:<member>\|am:<float>\|as:<asset>\|s:<bool>`) | Funds added (stake or treasury) | `af\|id:1\|by:hive:bob\|am:1.000000\|as:hive\|s:true` |
+| `rf` (`rf\|id:<project>\|to:<recipient>\|am:<float>\|as:<asset>\|fs:<bool>`) | Funds removed (payout/refund). Note the keys are `to:`/`fs:`, not `by:`/`s:` | `rf\|id:1\|to:hive:bob\|am:1.000000\|as:hive\|fs:true` |
+| `pc` (`pc\|id:<proposal>\|project:<project>\|by:<creator>`) | Proposal created (includes metadata + url snapshot + options with URLs) | `pc\|id:5\|by:hive:alice\|name:Idea\|description:something\|metadata:\|url:https://example\|duration:24\|isPoll:true\|options:Yes;No:https://docs.example.com/why-no\|payouts:\|outcomeMeta:` |
+| `ps` (`ps\|id:<proposal>\|s:<state>`) | Proposal state changed (`active`, `closed` (polls), `passed`, `executed`, `failed`, `cancelled`) | `ps\|id:5\|s:passed` |
 | `px` (`px\|pId:<project>\|prId:<proposal>\|ready:<unix>`) | Proposal becomes executable at timestamp | `px\|pId:1\|prId:5\|ready:1757020800` |
 | `pr` (`pr\|pId:<project>\|prId:<proposal>\|r:<result>`) | Result note (“meta changed”, “funds transferred”) | `pr\|pId:1\|prId:5\|r:funds transferred` |
 | `pm` (`pm\|pId:<project>\|prId:<proposal>\|f:<field>\|old:<val>\|new:<val>`) | Config/meta diffs per field (threshold, pause, owner, etc.) | `pm\|pId:1\|prId:6\|f:owner\|old:hive:alice\|new:hive:bob` |
@@ -375,10 +389,10 @@ Proposal executed (new threshold in effect)
 3. **Bob proposes a payout (0.5 HIVE to himself):**
    ```
    proposal_create
-   1|Writer Grant|Fund Bob for documentation|24||1|hive:bob:0.500:hive|||
+   1|Writer Grant|Fund Bob for documentation|24||0|hive:bob:0.500:hive|||
    ```
 
-   *Note: You can also use the legacy format `hive:bob:0.500` which defaults to the project's base asset (HIVE)*
+   *Note: the asset is REQUIRED — `hive:bob:0.500` (no asset) is rejected. Also note field 5 (`forcePoll`) must be `0` for a proposal whose payout/meta should actually execute: any poll closes advisory and never runs its outcome.*
 
 4. **Alice and Bob both vote yes (exceeding the 50.001% threshold):**
    ```
@@ -401,7 +415,7 @@ Proposal executed (new threshold in effect)
 6. **Alice submits a meta proposal to lower the threshold to 40% (Alice and Carol vote yes):**
    ```
    proposal_create
-   1|Tune Threshold|Lower approval bar|24||1||update_threshold=40|
+   1|Tune Threshold|Lower approval bar|24||0||update_threshold=40|
 
    proposals_vote
    <proposalId>|1   (Alice)
@@ -514,7 +528,7 @@ Projects can enable whitelist-based access control:
 
 | Event | Description | Example |
 |-------|-------------|---------|
-| `wl` (`wl\|pId:<project>\|a:<action>\|ad:<addresses>`) | Whitelist updated (add/remove) | `wl\|pId:1\|a:add\|ad:hive:alice;hive:bob` |
+| `wl` (`wl\|id:<project>\|act:<action>\|addrs:<addresses>`) | Whitelist updated (add/remove) | `wl\|id:1\|act:add\|addrs:hive:alice;hive:bob` |
 
 ### 10.6 Inter-Contract Calls (ICC)
 

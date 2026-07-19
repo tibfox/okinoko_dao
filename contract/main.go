@@ -29,6 +29,12 @@ func ContractInit(payload *string) *string {
 	// Parse permission parameter (unwrap from JSON)
 	permission := unwrapPayload(payload, "permission mode required (public or owner-only)")
 
+	// contract_init is one-shot and there is no meta action to change this later,
+	// so a typo ("Public", "pub", "owner_only") must not silently lock project
+	// creation to the deployer forever. Require an exact, known mode.
+	if permission != "public" && permission != "owner-only" {
+		sdk.Abort("permission mode must be exactly \"public\" or \"owner-only\"")
+	}
 	publicCreation := permission == "public"
 
 	// Store contract config with caller as owner. The owner is encoded into a

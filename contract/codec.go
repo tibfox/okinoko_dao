@@ -246,6 +246,7 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeInt64(prpsl.ExecutableAt)
 	w.writeString(prpsl.URL)
 	w.writeVarUint(prpsl.VoterCount)
+	w.writeAmount(prpsl.CostPaid)
 	return w.bytes()
 }
 
@@ -922,6 +923,12 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 	// Distinct voter count (added for correct quorum accounting).
 	if r.pos < len(r.data) {
 		if prpsl.VoterCount, err = r.readVarUint(); err != nil {
+			return nil, err
+		}
+	}
+	// Cost actually charged at creation (refund basis).
+	if r.pos < len(r.data) {
+		if prpsl.CostPaid, err = r.readAmount(); err != nil {
 			return nil, err
 		}
 	}

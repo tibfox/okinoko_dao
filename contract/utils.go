@@ -76,7 +76,13 @@ func nowUnix() int64 {
 			return v
 		}
 	}
-	return time.Now().Unix()
+	// NEVER fall back to wall-clock time. nowUnix() feeds consensus-critical state
+	// (proposal CreatedAt, member JoinedAt, stake-history timestamps), so a
+	// per-node time.Now() would stamp divergent values into state on every
+	// validator — an immediate chain fork. A missing/unparseable block timestamp
+	// is an unrecoverable environment error, so fail deterministically instead.
+	sdk.Abort("block timestamp unavailable")
+	return 0
 }
 
 // parseTimestamp accepts unix seconds or iso-ish strings since the env flips formats sometimes.

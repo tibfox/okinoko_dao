@@ -204,6 +204,7 @@ type Proposal struct {
 	OptionCount         uint32
 	ExecutableAt        int64
 	VoterCount          uint64 // distinct voters (for quorum; NOT the per-option tally)
+	CostPaid            Amount // proposal cost actually charged at creation (refund basis)
 }
 
 type CreateProjectArgs struct {

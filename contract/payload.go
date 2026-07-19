@@ -322,6 +322,13 @@ func parseChoiceField(val string) []uint {
 		if err != nil {
 			sdk.Abort("invalid choice index")
 		}
+		// `uint` is 32-bit on the wasm target, so uint(idx) would silently truncate:
+		// a choice of 2^32 becomes 0 and then PASSES the idx < OptionCount bounds
+		// check, recording the ballot against option 0 instead of being rejected.
+		// (Native test builds have 64-bit uint and never see this.) Bound here.
+		if idx >= uint64(MaxProposalOptions) {
+			sdk.Abort("invalid option index")
+		}
 		choices = append(choices, uint(idx))
 	}
 	return choices
@@ -333,7 +340,9 @@ func parseMetadataField(val string) map[string]string {
 	if val == "" {
 		return nil
 	}
-	if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+	// len >= 2 guard: for a single-byte value like `"` both index expressions hit
+	// the SAME byte, the condition passes, and val[1:0] panics (wasm trap).
+	if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
 		val = strings.TrimSpace(val[1 : len(val)-1])
 	}
 	if val == "" {

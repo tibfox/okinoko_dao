@@ -410,8 +410,19 @@ func AddFunds(payload *string) *string {
 			member.Stake = safeAddAmount(member.Stake, depositAmount)
 			member.LastActionAt = now
 			member.StakeIncrement++
+			// Changing your stake re-arms the leave cooldown. Without this an
+			// "exit requested" set once stays armed forever, so a member could
+			// pre-arm, later top up, vote, and withdraw in the very next call —
+			// defeating the cooldown's stated purpose (blocking vote-and-run).
+			member.ExitRequested = 0
 			saveMember(prj.ID, member)
-			saveStakeHistory(prj.ID, callerAddr, member.Stake, now, member.StakeIncrement)
+			// Stamp top-ups one second AFTER the block time so a top-up landing in
+			// the same block as a proposal's creation cannot count toward that
+			// proposal. getStakeAtTime matches entries with Timestamp <= CreatedAt,
+			// while the threshold denominator (StakeSnapshot) is captured before the
+			// top-up — counting it in the numerator only let a voter exceed 100% of
+			// the denominator. Joins keep their exact timestamp.
+			saveStakeHistory(prj.ID, callerAddr, member.Stake, now+1, member.StakeIncrement)
 			prj.StakeTotal = safeAddAmount(prj.StakeTotal, depositAmount)
 			stakeAdded = true
 			emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
