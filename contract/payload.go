@@ -223,7 +223,14 @@ func parseFloatField(val string, field string) float64 {
 	}
 	// NaN/Inf slip past every range check (all NaN comparisons are false), which
 	// would brick governance (NaN threshold never passes), bypass quorum
-	// (uint64(NaN)==0), or make proposals free (NaN cost). Reject them here.
+	// (uint64(NaN)==0), or make proposals free (NaN cost).
+	//
+	// DEFENCE IN DEPTH: this is currently unreachable from a payload. Literal
+	// "NaN"/"Inf" are rejected by the decimal-syntax filter above (they contain
+	// letters), and overflow literals like "1e999" are rejected by the ErrRange
+	// returned from ParseFloat. Verified by mutation: deleting this block leaves the
+	// suite green. Kept deliberately — it is the last line of defence if either
+	// earlier check is ever relaxed, and NaN reaching a threshold is unrecoverable.
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
 	}

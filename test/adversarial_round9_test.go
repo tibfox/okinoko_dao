@@ -18,30 +18,35 @@ func newProjectFields(threshold, quorum, cost, stakeMin string) []string {
 }
 
 // R9-1..5: NaN/Inf in each float config field is rejected at project creation.
+//
+// NOTE: the literal strings "NaN"/"Inf" are now caught by the decimal-syntax filter
+// in parseFloatField (they contain letters) BEFORE the math.IsNaN/IsInf guard runs.
+// These tests therefore pin the rejection, not that specific guard — see
+// TestBreak_OverflowLiteralRejected for one that actually reaches it.
 func TestBreak_NaNThresholdRejected(t *testing.T) {
 	ct := SetupContractTest()
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(newProjectFields("NaN", "50.001", "1", "1"))), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "NaN threshold accepted -> governance bricked")
+	assertAborts(t, res, "invalid threshold", "NaN threshold (governance would be bricked)")
 }
 func TestBreak_NaNQuorumRejected(t *testing.T) {
 	ct := SetupContractTest()
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(newProjectFields("50.001", "NaN", "1", "1"))), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "NaN quorum accepted -> quorum bypass")
+	assertAborts(t, res, "invalid quorum", "NaN quorum (quorum would be bypassed)")
 }
 func TestBreak_NaNCostRejected(t *testing.T) {
 	ct := SetupContractTest()
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(newProjectFields("50.001", "50.001", "NaN", "1"))), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "NaN proposal cost accepted -> free proposals")
+	assertAborts(t, res, "invalid proposal cost", "NaN proposal cost (proposals would be free)")
 }
 func TestBreak_InfThresholdRejected(t *testing.T) {
 	ct := SetupContractTest()
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(newProjectFields("Inf", "50.001", "1", "1"))), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "Inf threshold accepted")
+	assertAborts(t, res, "invalid threshold", "Inf threshold")
 }
 func TestBreak_InfCostRejected(t *testing.T) {
 	ct := SetupContractTest()
 	res := rawCallAt(ct, "project_create", PayloadString(joinPipe(newProjectFields("50.001", "50.001", "Inf", "1"))), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "Inf proposal cost accepted")
+	assertAborts(t, res, "invalid proposal cost", "Inf proposal cost")
 }
 
 // R9-6: NaN threshold via a passing governance proposal is rejected at execution.
