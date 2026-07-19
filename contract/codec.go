@@ -146,6 +146,7 @@ func encodeMember(w *binWriter, m *Member) {
 	w.writeInt64(m.ExitRequested)
 	w.writeInt64(m.Reputation)
 	w.writeUint64(m.StakeIncrement)
+	w.writeUint64(m.JoinSeq)
 }
 
 // EncodeMember packs a Member into bytes so storage stays lean and no json noise leaks.
@@ -246,6 +247,8 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeInt64(prpsl.ExecutableAt)
 	w.writeString(prpsl.URL)
 	w.writeVarUint(prpsl.VoterCount)
+	w.writeAmount(prpsl.CostPaid)
+	w.writeVarUint(prpsl.JoinSeqSnapshot)
 	return w.bytes()
 }
 
@@ -553,6 +556,13 @@ func decodeMember(r *binReader) (Member, error) {
 			return m, err
 		}
 	}
+	// JoinSeq is REQUIRED, not trailing-optional: the encoder always writes it and
+	// there is no pre-upgrade state anywhere. Defaulting a short record to 0 would
+	// silently present the member as the project's founder — the earliest possible
+	// sequence — and hand them voting rights on every proposal. Fail instead.
+	if m.JoinSeq, err = r.readUint64(); err != nil {
+		return m, err
+	}
 	return m, nil
 }
 
@@ -622,6 +632,13 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A length prefix is attacker-controlled: allocate only after bounding it
+	// against the same limit the payload parser enforces, so a crafted varint
+	// cannot request an arbitrarily large allocation (a 26-byte input OOM-killed
+	// a fuzz harness here).
+	if count > uint64(MaxPayoutReceivers) {
+		return nil, errors.New("length prefix exceeds maximum")
+	}
 	// Read payout slice (supports multiple entries per address with different assets)
 	payouts := make([]PayoutEntry, 0, count)
 	for i := uint64(0); i < count; i++ {
@@ -646,6 +663,9 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 		iccCount, err := r.readVarUint()
 		if err != nil {
 			return nil, err
+		}
+		if iccCount > uint64(MaxICCCalls) {
+			return nil, errors.New("length prefix exceeds maximum")
 		}
 		if iccCount > 0 {
 			iccCalls = make([]InterContractCall, iccCount)
@@ -925,6 +945,17 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 			return nil, err
 		}
 	}
+	// Cost actually charged at creation (refund basis).
+	if r.pos < len(r.data) {
+		if prpsl.CostPaid, err = r.readAmount(); err != nil {
+			return nil, err
+		}
+	}
+	// Join-sequence snapshot for vote eligibility. REQUIRED — see decodeMember: a
+	// missing snapshot would default to 0 and reject every member from voting.
+	if prpsl.JoinSeqSnapshot, err = r.readVarUint(); err != nil {
+		return nil, err
+	}
 	return prpsl, nil
 }
 
@@ -973,6 +1004,13 @@ func DecodeCreateProposalArgs(data []byte) (*CreateProposalArgs, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A length prefix is attacker-controlled: allocate only after bounding it
+	// against the same limit the payload parser enforces, so a crafted varint
+	// cannot request an arbitrarily large allocation (a 26-byte input OOM-killed
+	// a fuzz harness here).
+	if count > uint64(MaxProposalOptions) {
+		return nil, errors.New("length prefix exceeds maximum")
+	}
 	args.OptionsList = make([]ProposalOptionInput, count)
 	for i := uint64(0); i < count; i++ {
 		if args.OptionsList[i].Text, err = r.readString(); err != nil {
@@ -1011,6 +1049,13 @@ func DecodeVoteProposalArgs(data []byte) (*VoteProposalArgs, error) {
 	count, err := r.readVarUint()
 	if err != nil {
 		return nil, err
+	}
+	// A length prefix is attacker-controlled: allocate only after bounding it
+	// against the same limit the payload parser enforces, so a crafted varint
+	// cannot request an arbitrarily large allocation (a 26-byte input OOM-killed
+	// a fuzz harness here).
+	if count > uint64(MaxProposalOptions) {
+		return nil, errors.New("length prefix exceeds maximum")
 	}
 	args.Choices = make([]uint, count)
 	for i := uint64(0); i < count; i++ {

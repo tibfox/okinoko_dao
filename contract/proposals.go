@@ -28,7 +28,7 @@ func CreateProposal(payload *string) *string {
 		}
 	}
 
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerStr := caller.String()
 	callerAddr := caller
 	prj := loadProject(input.ProjectID)
@@ -76,8 +76,8 @@ func CreateProposal(payload *string) *string {
 	}
 	// Cap duration so CreatedAt + duration*3600 cannot overflow int64 and push the
 	// deadline into the past (which would make the proposal tallyable immediately).
-	if duration > MaxDurationHours {
-		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	if duration > MaxProposalDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxProposalDurationHours))
 	}
 
 	now := nowUnix()
@@ -111,9 +111,12 @@ func CreateProposal(payload *string) *string {
 		Tx:                  txID,
 		MemberCountSnapshot: memberSnap,
 		StakeSnapshot:       stakeSnap,
-		IsPoll:              isPoll,
-		OptionCount:         uint32(len(input.OptionsList)),
-		ExecutableAt:        0,
+		// Captured together with the two denominators above so that vote eligibility
+		// and the tally denominators describe exactly the same set of members.
+		JoinSeqSnapshot: currentJoinSeq(prj),
+		IsPoll:          isPoll,
+		OptionCount:     uint32(len(input.OptionsList)),
+		ExecutableAt:    0,
 	}
 
 	if prj.Config.ProposalCost > 0 {
@@ -132,6 +135,9 @@ func CreateProposal(payload *string) *string {
 		mAmount := AmountToInt64(costAmount)
 		sdk.HiveDraw(mAmount, ta.Token)
 		addTreasuryFunds(prj.ID, ta.Token, costAmount)
+		// Record what was actually charged so a later cancel refunds exactly this,
+		// even if governance changes ProposalCost in the meantime.
+		prpsl.CostPaid = costAmount
 		emitFundsAdded(prj.ID, callerStr, AmountToFloat(costAmount), ta.Token.String(), false)
 	}
 
@@ -271,7 +277,7 @@ func ExecuteProposal(proposalID *string) *string {
 
 	// If proposal has ICC calls, only creator can execute
 	if prpsl.Outcome != nil && len(prpsl.Outcome.ICC) > 0 {
-		caller := getSenderAddress()
+		caller := getActorAddress()
 		if caller != prpsl.Creator {
 			sdk.Abort("only proposal creator can execute proposals with inter-contract calls")
 		}
@@ -284,6 +290,16 @@ func ExecuteProposal(proposalID *string) *string {
 	if nowUnix() < requiredReady {
 		sdk.Abort(fmt.Sprintf("execution delay until %s", time.Unix(requiredReady, 0).UTC().Format(time.RFC3339)))
 	}
+
+	// CHECKS-EFFECTS-INTERACTIONS: commit the terminal state BEFORE any payout or
+	// inter-contract call. ExecuteProposal makes an attacker-controlled
+	// sdk.ContractCall below; the runtime permits re-entrancy (recursion depth 20),
+	// so if this write happened afterwards a hostile ICC callee could re-enter
+	// proposal_execute, still observe ProposalPassed, and replay the payout on
+	// every frame — draining the treasury from a single approved proposal.
+	// Any abort further down reverts this write along with everything else.
+	prpsl.State = ProposalExecuted
+	saveProposal(prpsl)
 
 	fundsTransferred := false
 	configChanged := false
@@ -355,8 +371,8 @@ func ExecuteProposal(proposalID *string) *string {
 					if v < MinProposalDurationHours {
 						sdk.Abort(fmt.Sprintf("proposal duration must be at least %d hour(s)", MinProposalDurationHours))
 					}
-					if v > MaxDurationHours {
-						sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+					if v > MaxProposalDurationHours {
+						sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxProposalDurationHours))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalDuration", fmt.Sprintf("%d", prj.Config.ProposalDurationHours), value)
 					prj.Config.ProposalDurationHours = v
@@ -540,6 +556,36 @@ func ExecuteProposal(proposalID *string) *string {
 				}
 			}
 		}
+		// CHECKS-EFFECTS-INTERACTIONS, part 2 — the PROJECT record.
+		//
+		// Everything above mutates the in-memory `prj` (payout/kick stake accounting,
+		// config and meta outcomes). Commit it here, BEFORE the ICC loop's external
+		// call, for the same reason the proposal state is committed before payouts.
+		//
+		// Writing these back AFTER the call was a live drain: because msg.sender
+		// propagates into nested frames (the deliberate delegation behaviour), a
+		// hostile ICC callee can re-enter the DAO as the executor and commit its own
+		// changes to the project record — a project_leave that refunds its stake, a
+		// project_funds that re-stakes it, a project_join, a project_pause. The
+		// trailing write then restored this stale snapshot over them, keeping the
+		// LEDGER movement while reverting the BOOKKEEPING. That desynced StakeTotal /
+		// MemberCount from reality, permanently inflating the quorum and threshold
+		// denominators snapshotted by future proposals, and in the worst case let the
+		// attacker hold voting stake the books had already refunded.
+		//
+		// The ICC loop below touches only prj.ID (treasury balances live under their
+		// own state keys, not in ProjectFinance), so it has no struct changes of its
+		// own to persist — nothing is lost by committing here.
+		if fundsTransferred {
+			saveProjectFinance(prj)
+		}
+		if configChanged {
+			saveProjectConfig(prj)
+		}
+		if stateChanged {
+			saveProjectMeta(prj)
+		}
+
 		if len(prpsl.Outcome.ICC) > 0 {
 			// Execute inter-contract calls
 			for _, icc := range prpsl.Outcome.ICC {
@@ -567,13 +613,18 @@ func ExecuteProposal(proposalID *string) *string {
 							sdk.Abort(fmt.Sprintf("failed to remove %s from treasury for ICC", AssetToString(asset)))
 						}
 
-						// Create transfer intent
+						// Create transfer intent.
+						// The host reads transfer.allow as Args["token"] + Args["limit"]
+						// and SILENTLY SKIPS the intent if either key is missing — the
+						// previous {"to","tk","amount"} form granted the callee nothing
+						// while the treasury was still debited above, permanently
+						// stranding the funds. "limit" is parsed as a DECIMAL string
+						// (e.g. "1.500"), not base units, so emit the scaled float.
 						intents = append(intents, sdk.Intent{
 							Type: "transfer.allow",
 							Args: map[string]string{
-								"to":     icc.ContractAddress,
-								"tk":     AssetToString(asset),
-								"amount": fmt.Sprintf("%d", AmountToInt64(amount)),
+								"token": AssetToString(asset),
+								"limit": fmt.Sprintf("%.3f", AmountToFloat(amount)),
 							},
 						})
 						fundsTransferred = true
@@ -590,17 +641,9 @@ func ExecuteProposal(proposalID *string) *string {
 		}
 	}
 
-	prpsl.State = ProposalExecuted
-	saveProposal(prpsl)
-	if fundsTransferred {
-		saveProjectFinance(prj)
-	}
-	if configChanged {
-		saveProjectConfig(prj)
-	}
-	if stateChanged {
-		saveProjectMeta(prj)
-	}
+	// (proposal state AND project record are both already committed above, before
+	// payouts and the ICC call — see the two checks-effects-interactions notes.
+	// Nothing may write a pre-ICC snapshot of shared state from here on.)
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	if metaChanged {
 		emitProposalResultEvent(prj.ID, prpsl.ID, "meta changed")
@@ -654,7 +697,7 @@ func CancelProposal(payload *string) *string {
 	}
 	prj := loadProject(prpsl.ProjectID)
 
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	// For autonomous projects, only creator can cancel (no owner exists)
 	isOwner := hasOwner(prj) && callerAddr == prj.Owner
@@ -662,11 +705,21 @@ func CancelProposal(payload *string) *string {
 		sdk.Abort("only creator or owner can cancel")
 	}
 
-	// Refund only if owner (not creator) cancels and there's a proposal cost
-	refund := isOwner && callerAddr != prpsl.Creator && prj.Config.ProposalCost > 0
+	// The owner must NOT be able to veto the members' escape hatch. Pause blocks
+	// leaving, so if the owner could also cancel every toggle_pause / update_owner /
+	// remove_owner proposal on sight, a hostile owner could freeze all member stake
+	// permanently. Those outcomes may only be withdrawn by their own creator.
+	if isOwner && callerAddr != prpsl.Creator && prpsl.Outcome != nil && outcomeIsPauseSafe(prpsl.Outcome) {
+		sdk.Abort("owner cannot cancel a pause/ownership recovery proposal")
+	}
+
+	// Refund only if owner (not creator) cancels and a cost was actually charged.
+	// Refund exactly what the creator paid (recorded at creation) — NOT the current
+	// configured cost, which governance can change between creation and cancel.
+	refund := isOwner && callerAddr != prpsl.Creator && prpsl.CostPaid > 0
 	var refundAmount Amount
 	if refund {
-		refundAmount = FloatToAmount(prj.Config.ProposalCost)
+		refundAmount = prpsl.CostPaid
 		treasuryBalance := getTreasuryBalance(prj.ID, prj.FundsAsset)
 		if treasuryBalance < refundAmount {
 			// Treasury has insufficient funds for refund - proposal cost remains with project

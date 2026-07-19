@@ -90,7 +90,7 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 		}
 		return ""
 	}
-	projectID := parseUintField(get(0), "project id")
+	projectID := parseEntityIDField(get(0), "project id")
 	name := strings.TrimSpace(get(1))
 	description := strings.TrimSpace(get(2))
 	if len(name) > MaxNameLength {
@@ -152,7 +152,7 @@ func decodeVoteProposalArgs(payload *string) *VoteProposalArgs {
 	if len(parts) < 2 {
 		sdk.Abort("vote payload requires proposalId|choices")
 	}
-	proposalID := parseUintField(parts[0], "proposal id")
+	proposalID := parseEntityIDField(parts[0], "proposal id")
 	choices := parseChoiceField(parts[1])
 	return &VoteProposalArgs{
 		ProposalID: proposalID,
@@ -167,7 +167,7 @@ func decodeAddFundsArgs(payload *string) *AddFundsArgs {
 	if len(parts) < 2 {
 		sdk.Abort("add funds payload requires projectId|toStake")
 	}
-	projectID := parseUintField(parts[0], "project id")
+	projectID := parseEntityIDField(parts[0], "project id")
 	toStake := parseBoolField(parts[1])
 	return &AddFundsArgs{
 		ProjectID: projectID,
@@ -206,6 +206,17 @@ func parseFloatField(val string, field string) float64 {
 	if val == "" {
 		return -1
 	}
+	// strconv.ParseFloat accepts Go literal syntax that a human payload never means:
+	// underscores ("1_0" -> 10) and hex-float forms ("0x1p+6" -> 64). The stored
+	// value then silently disagrees with the text an operator or UI displays. Accept
+	// only plain decimal notation.
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		if (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E' {
+			continue
+		}
+		sdk.Abort(fmt.Sprintf("invalid %s", field))
+	}
 	f, err := strconv.ParseFloat(val, 64)
 	if err != nil {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
@@ -217,6 +228,19 @@ func parseFloatField(val string, field string) float64 {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
 	}
 	return f
+}
+
+// parseEntityIDField parses a REQUIRED entity id (project / proposal).
+//
+// Unlike parseUintField it refuses an empty field instead of defaulting to 0.
+// Defaulting silently retargeted a truncated or malformed payload at entity 0
+// rather than failing: "|1" voted on proposal 0, and "|false" deposited into
+// project 0. An id is never optional, so absence is an error.
+func parseEntityIDField(val string, field string) uint64 {
+	if strings.TrimSpace(val) == "" {
+		sdk.Abort(fmt.Sprintf("%s is required", field))
+	}
+	return parseUintField(val, field)
 }
 
 // parseUintField is the uint variant used for durations and ids.
@@ -312,6 +336,13 @@ func parseChoiceField(val string) []uint {
 	raw := strings.FieldsFunc(val, func(r rune) bool {
 		return r == ',' || r == ';'
 	})
+	// Bound the ballot size. Selecting the same option repeatedly is deduped later,
+	// but the RAW list is what gets stored in the vote record, so an unbounded list
+	// (1000+ entries was accepted) is permanent state bloat for a single vote fee.
+	// No ballot can meaningfully name more distinct options than exist.
+	if len(raw) > MaxProposalOptions {
+		sdk.Abort("too many choices")
+	}
 	choices := make([]uint, 0, len(raw))
 	for _, part := range raw {
 		part = strings.TrimSpace(part)
@@ -321,6 +352,13 @@ func parseChoiceField(val string) []uint {
 		idx, err := strconv.ParseUint(part, 10, 64)
 		if err != nil {
 			sdk.Abort("invalid choice index")
+		}
+		// `uint` is 32-bit on the wasm target, so uint(idx) would silently truncate:
+		// a choice of 2^32 becomes 0 and then PASSES the idx < OptionCount bounds
+		// check, recording the ballot against option 0 instead of being rejected.
+		// (Native test builds have 64-bit uint and never see this.) Bound here.
+		if idx >= uint64(MaxProposalOptions) {
+			sdk.Abort("invalid option index")
 		}
 		choices = append(choices, uint(idx))
 	}
@@ -333,11 +371,19 @@ func parseMetadataField(val string) map[string]string {
 	if val == "" {
 		return nil
 	}
-	if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+	// len >= 2 guard: for a single-byte value like `"` both index expressions hit
+	// the SAME byte, the condition passes, and val[1:0] panics (wasm trap).
+	if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
 		val = strings.TrimSpace(val[1 : len(val)-1])
 	}
 	if val == "" {
 		return nil
+	}
+	// Bound the outcome-meta blob like every other free-form field. It is stored on
+	// the proposal record that each vote and tally reloads, so an unbounded value is
+	// a gas-griefing vector against every later voter, not just the author.
+	if len(val) > MaxMetaLength {
+		sdk.Abort(fmt.Sprintf("proposal meta exceeds maximum length of %d characters", MaxMetaLength))
 	}
 	meta := map[string]string{}
 	pairs := strings.Split(val, ";")
@@ -410,8 +456,8 @@ func normalizeProjectConfig(cfg *ProjectConfig) {
 		cfg.ProposalDurationHours = MinProposalDurationHours
 	}
 	// Upper-bound the time fields so value*3600 cannot overflow int64.
-	if cfg.ProposalDurationHours > MaxDurationHours {
-		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	if cfg.ProposalDurationHours > MaxProposalDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxProposalDurationHours))
 	}
 	if cfg.ExecutionDelayHours > MaxDurationHours {
 		sdk.Abort(fmt.Sprintf("execution delay must not exceed %d hours", MaxDurationHours))
@@ -601,7 +647,7 @@ func decodeWhitelistPayload(payload *string) (uint64, []sdk.Address) {
 	if len(parts) < 2 {
 		sdk.Abort("whitelist payload requires projectId|addresses")
 	}
-	projectID := parseUintField(parts[0], "project id")
+	projectID := parseEntityIDField(parts[0], "project id")
 	addresses := parseAddressList(parts[1])
 	if len(addresses) == 0 {
 		sdk.Abort("whitelist payload requires addresses")
@@ -623,6 +669,13 @@ func parseICCField(val string) []InterContractCall {
 
 	calls := []InterContractCall{}
 	entries := strings.Split(val, ";")
+	// Bound the ICC list like payouts (MaxPayoutReceivers) and options
+	// (MaxProposalOptions). Every entry is executed inside a single
+	// ExecuteProposal, each with its own external call and treasury debit, and all
+	// of them are stored on the proposal record. 200 entries were accepted before.
+	if len(entries) > MaxICCCalls {
+		sdk.Abort(fmt.Sprintf("ICC cannot exceed %d calls per proposal", MaxICCCalls))
+	}
 
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)

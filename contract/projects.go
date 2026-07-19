@@ -21,7 +21,7 @@ func CreateProject(payload *string) *string {
 
 	// Check project creation permission
 	cfg := loadContractConfig()
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	if !cfg.ProjectCreationPublic && !isContractOwner(caller) {
 		sdk.Abort("only contract owner can create projects")
 	}
@@ -101,6 +101,8 @@ func CreateProject(payload *string) *string {
 		LastActionAt:   now,
 		Reputation:     0,
 		StakeIncrement: 0,
+		// The founding member takes sequence 0; every later joiner sorts after them.
+		JoinSeq: allocateJoinSeq(&prj),
 	}
 	saveMember(prj.ID, &creatorMember)
 	// Save initial stake history
@@ -140,7 +142,7 @@ func JoinProject(projectID *string) *string {
 	if prj.Paused {
 		sdk.Abort("project paused")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 
 	if _, exists := loadMember(prj.ID, callerAddr); exists {
@@ -204,12 +206,22 @@ func JoinProject(projectID *string) *string {
 		JoinedAt:       now,
 		LastActionAt:   now,
 		StakeIncrement: 0,
+		JoinSeq:        allocateJoinSeq(prj),
 	}
 	saveMember(prj.ID, &newMember)
 	// Save initial stake history
 	saveStakeHistory(prj.ID, callerAddr, depositAmount, now, 0)
-	prj.MemberCount++
-	prj.StakeTotal = safeAddAmount(prj.StakeTotal, depositAmount)
+
+	// Re-read the finance record before mutating it. `prj` was loaded BEFORE
+	// checkNFTMembership above, which makes an sdk.ContractCall into a
+	// PROJECT-CONFIGURED contract; that callee can re-enter this DAO as the joiner
+	// (msg.sender propagates into nested frames) and change MemberCount/StakeTotal.
+	// Incrementing the pre-call snapshot would silently revert its work while
+	// keeping any ledger movement it caused — the same desync class fixed in
+	// ExecuteProposal. Applying the delta to freshly-read state is re-entrancy-safe.
+	fresh := loadProjectFinance(prj.ID)
+	prj.MemberCount = fresh.MemberCount + 1
+	prj.StakeTotal = safeAddAmount(fresh.StakeTotal, depositAmount)
 	saveProjectFinance(prj)
 	emitJoinedEvent(prj.ID, AddressToString(callerAddr))
 	if depositAmount > 0 {
@@ -229,7 +241,7 @@ func WhitelistMembers(payload *string) *string {
 	// TestOwnerWhitelistAddNoLimit / TestOwnerWhitelistAdd100Addresses). Only the
 	// proposal meta path (whitelist_add) enforces MaxWhitelistAddresses.
 	prj := loadProject(projectID)
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	if !hasOwner(prj) {
 		sdk.Abort("project is autonomous - no owner privileges")
 	}
@@ -251,7 +263,7 @@ func RemoveWhitelistedMembers(payload *string) *string {
 	requireInitialized()
 	projectID, addresses := decodeWhitelistPayload(payload)
 	prj := loadProject(projectID)
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	if !hasOwner(prj) {
 		sdk.Abort("project is autonomous - no owner privileges")
 	}
@@ -276,7 +288,7 @@ func LeaveProject(projectID *string) *string {
 	if err != nil {
 		sdk.Abort("invalid project ID")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	prj := loadProject(id)
 	if prj.Paused {
@@ -303,10 +315,14 @@ func LeaveProject(projectID *string) *string {
 		sdk.Abort("cooldown not passed")
 	}
 
-	// refund stake
+	// Refund stake. The transfer is SKIPPED for a zero balance: the host rejects a
+	// zero-value transfer ("amount must be positive"), which would otherwise abort
+	// the whole call and make members of a free-membership project (StakeMinAmt <= 0,
+	// where every member legitimately holds Stake == 0) permanently unable to leave.
 	withdraw := member.Stake
-	mAmount := AmountToInt64(withdraw)
-	sdk.HiveTransfer(caller, mAmount, prj.FundsAsset)
+	if withdraw > 0 {
+		sdk.HiveTransfer(caller, AmountToInt64(withdraw), prj.FundsAsset)
+	}
 
 	// Delete all stake history for this member
 	deleteAllStakeHistory(prj.ID, callerAddr, member.StakeIncrement)
@@ -322,6 +338,27 @@ func LeaveProject(projectID *string) *string {
 	emitLeaveEvent(prj.ID, AddressToString(callerAddr))
 	emitFundsRemoved(prj.ID, AddressToString(callerAddr), AmountToFloat(withdraw), AssetToString(prj.FundsAsset), true)
 	return strptr("exit finished")
+}
+
+// projectJoinSeqKey holds the project's monotonic join counter — the next sequence
+// number to hand out. Kept in its own counter key rather than in ProjectFinance so
+// the join path does not have to re-encode the finance record to allocate one.
+func projectJoinSeqKey(projectID uint64) string {
+	return "count:js:" + UInt64ToString(projectID)
+}
+
+// currentJoinSeq returns the sequence number the NEXT member would receive, which
+// is also the eligibility cutoff a proposal created right now must snapshot.
+// A fresh project starts at 0, so its founding member takes sequence 0.
+func currentJoinSeq(prj *Project) uint64 {
+	return getCount(projectJoinSeqKey(prj.ID))
+}
+
+// allocateJoinSeq consumes and returns the next join sequence number.
+func allocateJoinSeq(prj *Project) uint64 {
+	seq := currentJoinSeq(prj)
+	setCount(projectJoinSeqKey(prj.ID), seq+1)
+	return seq
 }
 
 // hasActivePayout checks payout locks to avoid releasing stake while funds are still promised.
@@ -375,7 +412,7 @@ func AddFunds(payload *string) *string {
 	if prj.Paused && input.ToStake {
 		sdk.Abort("cannot add stake while project is paused")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 
 	// Get all valid transfer intents
@@ -410,8 +447,19 @@ func AddFunds(payload *string) *string {
 			member.Stake = safeAddAmount(member.Stake, depositAmount)
 			member.LastActionAt = now
 			member.StakeIncrement++
+			// Changing your stake re-arms the leave cooldown. Without this an
+			// "exit requested" set once stays armed forever, so a member could
+			// pre-arm, later top up, vote, and withdraw in the very next call —
+			// defeating the cooldown's stated purpose (blocking vote-and-run).
+			member.ExitRequested = 0
 			saveMember(prj.ID, member)
-			saveStakeHistory(prj.ID, callerAddr, member.Stake, now, member.StakeIncrement)
+			// Stamp top-ups one second AFTER the block time so a top-up landing in
+			// the same block as a proposal's creation cannot count toward that
+			// proposal. getStakeAtTime matches entries with Timestamp <= CreatedAt,
+			// while the threshold denominator (StakeSnapshot) is captured before the
+			// top-up — counting it in the numerator only let a voter exceed 100% of
+			// the denominator. Joins keep their exact timestamp.
+			saveStakeHistory(prj.ID, callerAddr, member.Stake, now+1, member.StakeIncrement)
 			prj.StakeTotal = safeAddAmount(prj.StakeTotal, depositAmount)
 			stakeAdded = true
 			emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
@@ -459,10 +507,14 @@ func kickMember(prj *Project, addr sdk.Address) {
 		sdk.Abort(fmt.Sprintf("cannot kick %s: active payout pending", AddressToString(addr)))
 	}
 
-	// Refund stake
+	// Refund stake. Skipped for a zero balance — see LeaveProject. Here the stakes are
+	// higher still: a zero-value transfer aborts the ENTIRE ExecuteProposal, so a
+	// passed proposal carrying a kick_member outcome could never execute at any
+	// timestamp, permanently stranding any payout riding on that same proposal.
 	withdraw := member.Stake
-	mAmount := AmountToInt64(withdraw)
-	sdk.HiveTransfer(addr, mAmount, prj.FundsAsset)
+	if withdraw > 0 {
+		sdk.HiveTransfer(addr, AmountToInt64(withdraw), prj.FundsAsset)
+	}
 
 	// Cleanup
 	deleteAllStakeHistory(prj.ID, addr, member.StakeIncrement)
@@ -505,7 +557,7 @@ func TransferProjectOwnership(payload *string) *string {
 	if newOwnerStr == "" {
 		sdk.Abort("new owner address required")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	newOwnerAddr := AddressFromString(newOwnerStr)
 	validateAddress(newOwnerAddr)
@@ -549,7 +601,7 @@ func EmergencyPauseImmediate(payload *string) *string {
 	if len(parts) > 1 {
 		pause = parseBoolField(parts[1])
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	prj := loadProject(id)
 	if !hasOwner(prj) {

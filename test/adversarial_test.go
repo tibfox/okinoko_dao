@@ -217,6 +217,16 @@ func TestBreak_VoteInvalidOptionIndex(t *testing.T) {
 	propID := createSimpleProposal(t, ct, pid, "1")
 	res := voteRaw(ct, propID, "hive:someone", "999", "v")
 	assert.False(t, res.Success, "vote for nonexistent option index was accepted")
+
+	// Index 5 on a 2-option ballot: BELOW MaxProposalOptions, so this is the only
+	// case that reaches the per-proposal `idx >= OptionCount` bound in votes.go.
+	// The 999 above (like every other invalid-index test in this suite) is caught
+	// earlier by parseChoiceField's MaxProposalOptions check, which aborts with the
+	// identical "invalid option index" message — so those tests look like coverage
+	// of the per-proposal bound but never actually exercise it.
+	inRange := voteRaw(ct, propID, "hive:someone", "5", "v2")
+	assert.False(t, inRange.Success,
+		"vote for option 5 on a 2-option proposal was accepted (per-proposal bound not enforced)")
 }
 
 // BREAK 9: A member who already left cannot vote.

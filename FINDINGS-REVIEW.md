@@ -242,3 +242,107 @@ engine (single-node), asserting balances and state at every step. Suite: 287 gre
 
 NB: this exercises the full contract execution path end-to-end but is still single-node —
 a multi-node consensus devnet run remains the last mile before mainnet.
+
+---
+
+## Independent review (4 external reviewers) — 2 CRITICALs found that this review missed
+
+Four independent agents reviewed the hardened tree with distinct lenses (security/
+exploitation, consensus+state, governance design, code+spec conformance), and were
+deliberately NOT primed with the findings above. Crux claims were re-verified against
+the node source before acting. Suite after remediation: **295 green**.
+
+### R1 — CRITICAL: ICC re-entrancy → treasury multi-drain (found independently by 2 reviewers)
+`ExecuteProposal` paid out, made an attacker-controlled `sdk.ContractCall`, and only
+*then* wrote `ProposalExecuted`. The runtime permits re-entrancy
+(`CONTRACT_CALL_MAX_RECURSION_DEPTH = 20`; the node ships `reentrancy_stress_test.go`),
+so a hostile ICC callee could re-enter `proposal_execute`, still observe
+`ProposalPassed`, and replay the payout on every frame from ONE approved proposal.
+**Fixed:** the terminal state is committed *before* any payout/ICC
+(checks-effects-interactions).
+
+### R2 — ACCEPTED RISK (not fixed by decision): `msg.sender` confused deputy
+The host propagates `Sender` verbatim into nested call frames
+(`execution-context.go:640-641`: `Caller: "contract:"+id`, `Sender: ctx.env.Sender`).
+Authorizing on `msg.sender` therefore means **any** contract a member calls can call
+back into the DAO within the same transaction and act with that member's full
+authority — steal project ownership, cast their stake, cancel their proposals, force
+a leave.
+
+**Decision: keep `msg.sender` (identity = original signer).** This is deliberate and
+enables delegation: a member can call a helper/integration contract and have it act on
+the DAO *as the member*, keeping their own membership, stake and votes. Authorizing on
+`msg.caller` would make the helper contract itself the member, which is not the
+intended UX. The mitigation is social, not technical — members must only interact with
+contracts they trust, exactly as with an ERC-20 approval. Reversing this is a one-line
+change in `getActorAddress()` (`context.go`) if the assumption ever becomes untenable.
+
+**This does NOT re-open the R1 treasury drain.** R1 was fixed independently by
+committing the terminal state before any payout/external call, so a re-entrant frame
+can no longer observe `ProposalPassed` and replay a payout — regardless of whose
+identity the re-entrant frame carries.
+
+### R3 — HIGH: ICC transfer intents used the wrong arg names (found by 3 reviewers)
+The host reads `transfer.allow` as `Args["token"]` + `Args["limit"]` and *silently
+skips* the intent if either is missing; the code emitted `{"to","tk","amount"}`. The
+treasury was debited while the callee received a zero allowance — funds permanently
+stranded. (This review had previously mischaracterized it as an accepted
+"allowance-debit" design limitation; it was a concrete bug.) **Fixed:** canonical
+`token`/`limit`, with `limit` emitted as a decimal string (the host parses decimals,
+not base units).
+
+### R4 — HIGH: owner could veto the members' escape hatch → permanent stake confiscation
+Pause blocks `project_leave`, and the owner could cancel *any* Active proposal —
+including the `toggle_pause`/`remove_owner` recovery proposals the readme advertises
+as self-recovery. A hostile owner could freeze all member stake indefinitely.
+**Fixed:** the owner may no longer cancel a pause-safe (recovery) proposal; only its
+own creator can withdraw it.
+
+### R5 — HIGH: leave cooldown was a one-time arming → vote-and-run
+`ExitRequested` was set once and never cleared, so a member could pre-arm an exit,
+let the cooldown lapse, and thereafter withdraw stake in the very next call — voting
+then exiting immediately, which the cooldown exists to prevent. **Fixed:** voting and
+any stake change re-arm the cooldown.
+
+### R6 — HIGH: cancel refunded the *current* configured cost, not the amount paid
+Create proposals while `proposalCost` is 0, raise the cost via governance, then have
+the owner cancel them — the treasury paid out for proposals that cost nothing.
+**Fixed:** `Proposal.CostPaid` records what was actually charged; refunds use it.
+
+### R7 — HIGH: same-block stake top-up could exceed 100% of the threshold denominator
+`getStakeAtTime` matches `Timestamp <= CreatedAt` (so a top-up in the proposal's own
+block counted), while the denominator `StakeSnapshot` was captured *before* it — the
+ratio was not bounded by 1. **Fixed:** top-up history entries are stamped one second
+after the block time, so they cannot count toward a proposal created in the same
+block. Joins keep their exact timestamp (same-block join→propose→vote still works).
+
+### R8 — MEDIUM (fixed)
+- `nowUnix()` fell back to `time.Now()` — a per-node wall clock stamped into
+  consensus-critical state would fork the chain. Now aborts deterministically.
+- `parseMetadataField` trapped (wasm panic) on a single-character quote — missing
+  `len >= 2` guard.
+- `uint` is 32-bit on wasm, so a vote choice of 2^32 truncated to 0 and *passed* the
+  bounds check, silently recording a ballot for option 0. Now bounded at parse.
+- `contract_init` silently degraded an unrecognized mode to owner-only, permanently
+  (one-shot, no meta action to change it). Now requires exactly `public`/`owner-only`.
+
+### R9 — Documentation bugs (fixed in readme.md)
+- The flagship §9 worked examples used `forcePoll=1`, making them **polls** — the
+  payout and the threshold change they promise could never execute.
+- A documented "legacy payout format" (`hive:bob:0.500`, no asset) is rejected by the
+  parser.
+- `whitelistOnly` is the 18th `project_create` field but the spec stopped at 17.
+- The `{nft}|{caller}` default cannot be written literally inside a pipe-delimited
+  payload.
+- Event field names didn't match what is emitted (`rf` uses `to:`/`fs:`, `pc` includes
+  `project:`, `wl` uses `id:`/`act:`/`addrs:`, `ps` also emits `closed`).
+- `remove_owner` — the most destructive governance action — was undocumented, as were
+  several enforced limits.
+
+### Deferred (design decisions, not defects)
+Governance can still ratchet its own threshold/quorum/delay down to the floor; quorum
+is a headcount even in stake DAOs; free+democratic DAOs have refundable-cost Sybil
+exposure; a 1-member or abandoned-autonomous project can drain donated funds;
+payout locks release at tally rather than execution; `kick_member` remains
+all-or-nothing (asserted by an existing test). These need product decisions rather
+than a patch, and are recorded here rather than silently changed.

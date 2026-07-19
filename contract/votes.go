@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"okinoko_dao/sdk"
+	"sort"
 )
 
 // -----------------------------------------------------------------------------
@@ -99,14 +100,24 @@ func VoteProposal(payload *string) *string {
 		sdk.Abort("proposal not active")
 	}
 	prj := loadProject(prpsl.ProjectID)
-	voter := getSenderAddress()
+	voter := getActorAddress()
 	voterAddr := voter
 	member := getMember(prj.ID, voterAddr)
 
 	prevVote := loadVoteRecord(input.ProposalID, voter)
 
-	// check if member joined after proposal
-	if member.JoinedAt > prpsl.CreatedAt {
+	// Reject members who joined after the proposal was created.
+	//
+	// This MUST NOT be a timestamp comparison. nowUnix() returns the BLOCK
+	// timestamp, which is identical for every transaction in a block, so
+	// JoinedAt == CreatedAt for members who joined earlier in the same block (they
+	// ARE inside MemberCountSnapshot/StakeSnapshot) and equally for those who joined
+	// later in the same block (they are NOT). A `>` comparison admits the latter,
+	// letting an attacker bundle create + sybil joins + votes into one block and
+	// vote against a stale denominator — total weight over 100%, honest members
+	// never needed. A `>=` comparison would instead disenfranchise the former.
+	// Timestamps simply cannot order events within a block; the join sequence can.
+	if member.JoinSeq >= prpsl.JoinSeqSnapshot {
 		sdk.Abort("proposal was created before joining the project")
 	}
 
@@ -179,9 +190,30 @@ func VoteProposal(payload *string) *string {
 		option.VoterCount++
 	}
 
-	// Save all modified options
-	for idx32, option := range optionCache {
-		saveProposalOption(prpsl.ID, idx32, option)
+	// Save all modified options in a deterministic order.
+	//
+	// Go map iteration order differs per node. This is currently harmless — the
+	// host's state store is itself a map and the gas meter charges
+	// max(0, len(new)-len(prev)), which is 0 for every option re-write since only
+	// the fixed-width weight/count fields change. But ContractSession tracks a
+	// running MaxSize that IS order-sensitive once any size-decreasing write is
+	// interleaved, so relying on that is a latent consensus hazard. Sort the keys:
+	// the cost is negligible and it removes the dependency entirely.
+	idxs := make([]uint32, 0, len(optionCache))
+	for idx32 := range optionCache {
+		idxs = append(idxs, idx32)
+	}
+	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
+	for _, idx32 := range idxs {
+		saveProposalOption(prpsl.ID, idx32, optionCache[idx32])
+	}
+
+	// Voting re-arms the leave cooldown: a pre-armed "exit requested" would
+	// otherwise let a member vote and withdraw their stake in the very next call
+	// (vote-and-run), which the cooldown exists to prevent.
+	if member.ExitRequested != 0 {
+		member.ExitRequested = 0
+		saveMember(prj.ID, &member)
 	}
 
 	// Track DISTINCT voters for quorum (a voter selecting multiple options must

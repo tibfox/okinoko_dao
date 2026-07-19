@@ -120,6 +120,12 @@ type Member struct {
 	ExitRequested  int64
 	Reputation     int64
 	StakeIncrement uint64 // Counter incremented on each stake change
+	// JoinSeq is this member's position in the project's monotonic join sequence.
+	// Vote eligibility compares it against Proposal.JoinSeqSnapshot instead of
+	// comparing timestamps: every transaction in a block shares one block
+	// timestamp, so JoinedAt cannot distinguish "joined before this proposal" from
+	// "joined after it in the same block". The founding member is 0.
+	JoinSeq uint64
 }
 
 type Project struct {
@@ -150,7 +156,7 @@ type ProjectMeta struct {
 
 // ProjectFinance keeps track of treasury and aggregate staking data.
 type ProjectFinance struct {
-	FundsAsset  sdk.Asset            // Main project asset (used for staking)
+	FundsAsset  sdk.Asset // Main project asset (used for staking)
 	StakeTotal  Amount
 	MemberCount uint64
 	Treasury    map[sdk.Asset]Amount // Multi-asset treasury balances
@@ -172,9 +178,9 @@ type PayoutEntry struct {
 
 // InterContractCall represents a single inter-contract call with asset transfers
 type InterContractCall struct {
-	ContractAddress string            // Target contract address
-	Function        string            // Function/method to call
-	Payload         string            // JSON payload string for the function
+	ContractAddress string               // Target contract address
+	Function        string               // Function/method to call
+	Payload         string               // JSON payload string for the function
 	Assets          map[sdk.Asset]Amount // Asset transfers to include (e.g., map[HIVE]1000, map[HBD]500)
 }
 
@@ -204,6 +210,11 @@ type Proposal struct {
 	OptionCount         uint32
 	ExecutableAt        int64
 	VoterCount          uint64 // distinct voters (for quorum; NOT the per-option tally)
+	CostPaid            Amount // proposal cost actually charged at creation (refund basis)
+	// JoinSeqSnapshot is the project's join counter at creation time. A member may
+	// vote only if their JoinSeq is strictly below it, which matches exactly the
+	// membership captured by MemberCountSnapshot/StakeSnapshot.
+	JoinSeqSnapshot uint64
 }
 
 type CreateProjectArgs struct {
