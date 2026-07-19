@@ -88,6 +88,11 @@ func decodeVoteRecord(data string) *voteRecord {
 func VoteProposal(payload *string) *string {
 	requireInitialized()
 	input := decodeVoteProposalArgs(payload)
+	// An empty ballot is not participation — reject it so it cannot silently count
+	// toward quorum (the distinct-voter counter below only bumps on a real ballot).
+	if len(input.Choices) == 0 {
+		sdk.Abort("vote must select at least one option")
+	}
 	prpsl := loadProposal(input.ProposalID)
 
 	if prpsl.State != ProposalActive {
@@ -105,16 +110,23 @@ func VoteProposal(payload *string) *string {
 		sdk.Abort("proposal was created before joining the project")
 	}
 
-	// Use historical stake from proposal creation time
-	// This prevents members from increasing stake after proposal creation to gain more voting power
-	weight := getStakeAtTime(prj.ID, voterAddr, prpsl.CreatedAt, member.StakeIncrement)
-	if weight == 0 {
-		sdk.Abort("no stake history found at proposal creation time")
-	}
-
-	// check if stakemin is still valid (it can get modified by proposals)
-	if FloatToAmount(prj.Config.StakeMinAmt) > weight {
-		sdk.Abort("minimum stake requirement not met at proposal creation time")
+	// Determine voting weight.
+	//  - Democratic projects are 1-member-1-vote: every member gets a fixed unit,
+	//    so free-membership DAOs (stake 0) remain governable.
+	//  - Stake projects use the member's historical stake at proposal-creation time,
+	//    which prevents topping up stake after creation to buy more voting power.
+	var weight Amount
+	if prj.Config.VotingSystem == VotingSystemDemocratic {
+		weight = Amount(AmountScale) // one vote unit
+	} else {
+		weight = getStakeAtTime(prj.ID, voterAddr, prpsl.CreatedAt, member.StakeIncrement)
+		if weight == 0 {
+			sdk.Abort("no stake history found at proposal creation time")
+		}
+		// check if stakemin is still valid (it can get modified by proposals)
+		if FloatToAmount(prj.Config.StakeMinAmt) > weight {
+			sdk.Abort("minimum stake requirement not met at proposal creation time")
+		}
 	}
 
 	// Load all options once to avoid repeated storage reads
@@ -170,6 +182,13 @@ func VoteProposal(payload *string) *string {
 	// Save all modified options
 	for idx32, option := range optionCache {
 		saveProposalOption(prpsl.ID, idx32, option)
+	}
+
+	// Track DISTINCT voters for quorum (a voter selecting multiple options must
+	// count once, not once per option). Only a brand-new ballot bumps the count.
+	if prevVote == nil {
+		prpsl.VoterCount++
+		saveProposal(prpsl)
 	}
 
 	saveVote(input.ProposalID, voter, input.Choices, AmountToFloat(weight))

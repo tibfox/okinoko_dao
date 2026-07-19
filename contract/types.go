@@ -12,6 +12,13 @@ import (
 
 type Amount int64
 
+// maxAmount / minAmount are the int64 bounds of a scaled Amount, used by the
+// overflow-safe math helpers and by FloatToAmount's range check.
+const (
+	maxAmount Amount = math.MaxInt64
+	minAmount Amount = math.MinInt64
+)
+
 // VotingSystem defines the vote weighting model for a project.
 type VotingSystem uint8
 
@@ -25,9 +32,21 @@ type ContractConfig struct {
 }
 
 // FloatToAmount scales human floats by AmountScale and rounds to int64 so storage stays precise.
+// It aborts on NaN/Inf or out-of-range values instead of wrapping the int64 into
+// a bogus (possibly negative) balance.
 // Example payload: FloatToAmount(1.234)
 func FloatToAmount(v float64) Amount {
-	return Amount(math.Round(v * AmountScale))
+	scaled := math.Round(v * AmountScale)
+	if math.IsNaN(scaled) || math.IsInf(scaled, 0) {
+		sdk.Abort("invalid amount")
+	}
+	// float64(math.MaxInt64) rounds UP to 2^63, which is not a valid int64. Use >=
+	// so a scaled value of exactly 2^63 is rejected instead of wrapping negative
+	// (native) or trapping (wasm i64.trunc). MinInt64 == -2^63 is exact, so keep <.
+	if scaled >= float64(math.MaxInt64) || scaled < float64(math.MinInt64) {
+		sdk.Abort("amount out of range")
+	}
+	return Amount(scaled)
 }
 
 // AmountToFloat converts back to float64 for reporting or events.
@@ -184,6 +203,7 @@ type Proposal struct {
 	ResultOptionID      int32
 	OptionCount         uint32
 	ExecutableAt        int64
+	VoterCount          uint64 // distinct voters (for quorum; NOT the per-option tally)
 }
 
 type CreateProjectArgs struct {

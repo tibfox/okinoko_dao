@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"okinoko_dao/sdk"
 	"strconv"
 	"strings"
@@ -25,6 +26,12 @@ func decodeCreateProjectArgs(payload *string) *CreateProjectArgs {
 	}
 	if len(description) > MaxDescriptionLength {
 		sdk.Abort(fmt.Sprintf("project description exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
+	if len(get(13)) > MaxDescriptionLength {
+		sdk.Abort(fmt.Sprintf("project metadata exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
+	if len(get(16)) > MaxURLLength {
+		sdk.Abort(fmt.Sprintf("project URL exceeds maximum length of %d characters", MaxURLLength))
 	}
 	args := &CreateProjectArgs{
 		Name:        name,
@@ -98,7 +105,23 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 	payouts := parsePayoutField(get(6))
 	metaOutcome := parseMetadataField(get(7))
 	metadata := normalizeOptionalField(get(8))
-	iccCalls := parseICCField(get(10))
+	// Bound the free-form metadata/URL like name/description: an unbounded blob
+	// bloats the proposal record that every vote/tally reloads (gas griefing).
+	if len(metadata) > MaxDescriptionLength {
+		sdk.Abort(fmt.Sprintf("proposal metadata exceeds maximum length of %d characters", MaxDescriptionLength))
+	}
+	if len(get(9)) > MaxURLLength {
+		sdk.Abort(fmt.Sprintf("proposal URL exceeds maximum length of %d characters", MaxURLLength))
+	}
+	// ICC is the trailing field and its own grammar uses '|' internally
+	// (contract|function|payload|assets), so it spans every part from index 10
+	// onward. Rejoin them; reading only parts[10] truncated the entry and made the
+	// whole ICC feature unreachable (even the documented example failed to parse).
+	iccRaw := ""
+	if len(parts) > 10 {
+		iccRaw = strings.Join(parts[10:], "|")
+	}
+	iccCalls := parseICCField(iccRaw)
 
 	var outcome *ProposalOutcome
 	if len(payouts) > 0 || len(metaOutcome) > 0 || len(iccCalls) > 0 {
@@ -185,6 +208,12 @@ func parseFloatField(val string, field string) float64 {
 	}
 	f, err := strconv.ParseFloat(val, 64)
 	if err != nil {
+		sdk.Abort(fmt.Sprintf("invalid %s", field))
+	}
+	// NaN/Inf slip past every range check (all NaN comparisons are false), which
+	// would brick governance (NaN threshold never passes), bypass quorum
+	// (uint64(NaN)==0), or make proposals free (NaN cost). Reject them here.
+	if math.IsNaN(f) || math.IsInf(f, 0) {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
 	}
 	return f
@@ -323,6 +352,13 @@ func parseMetadataField(val string) map[string]string {
 		}
 		key := strings.TrimSpace(split[0])
 		value := strings.TrimSpace(split[1])
+		// Reject unknown meta keys up front. The execute-time switch has no default
+		// case, so a typo'd/unknown key would silently no-op while the proposal still
+		// "passes" — voters would believe a governance change was enacted that never
+		// happened. Fail fast at creation instead.
+		if !isKnownMetaKey(key) {
+			sdk.Abort(fmt.Sprintf("unknown meta action: %s", key))
+		}
 		// Validate contract existence for NFT contract updates
 		if key == "update_membershipNFTContract" && value != "" {
 			if !contractExists(value) {
@@ -332,6 +368,21 @@ func parseMetadataField(val string) map[string]string {
 		meta[key] = value
 	}
 	return meta
+}
+
+// isKnownMetaKey lists every meta action ExecuteProposal actually handles.
+func isKnownMetaKey(key string) bool {
+	switch key {
+	case "update_threshold", "update_quorum", "update_proposalDuration",
+		"update_executionDelay", "update_leaveCooldown", "update_proposalCost",
+		"update_membershipNFT", "update_membershipNFTContract",
+		"update_membershipNFTContractFunction", "update_membershipNFTPayload",
+		"update_proposalCreatorRestriction", "update_url", "update_owner",
+		"remove_owner", "toggle_pause", "update_whitelistOnly",
+		"whitelist_add", "whitelist_remove", "kick_member":
+		return true
+	}
+	return false
 }
 
 // normalizeProjectConfig ensures configs always have sane fallbacks before persisting.
@@ -358,11 +409,29 @@ func normalizeProjectConfig(cfg *ProjectConfig) {
 	if cfg.ProposalDurationHours < MinProposalDurationHours {
 		cfg.ProposalDurationHours = MinProposalDurationHours
 	}
+	// Upper-bound the time fields so value*3600 cannot overflow int64.
+	if cfg.ProposalDurationHours > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	}
+	if cfg.ExecutionDelayHours > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("execution delay must not exceed %d hours", MaxDurationHours))
+	}
 	if cfg.LeaveCooldownHours <= 0 {
 		cfg.LeaveCooldownHours = FallbackLeaveCooldownHours
 	}
+	if cfg.LeaveCooldownHours > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("leave cooldown must not exceed %d hours", MaxDurationHours))
+	}
 	if cfg.ProposalCost < 0 {
 		cfg.ProposalCost = FallbackProposalCost
+	}
+	// A positive cost/stake that rounds below chain precision (AmountScale) would
+	// silently become 0 — free proposals / zero stake. Reject that misconfiguration.
+	if cfg.ProposalCost > 0 && FloatToAmount(cfg.ProposalCost) <= 0 {
+		sdk.Abort("proposal cost is below the minimum representable amount")
+	}
+	if cfg.StakeMinAmt > 0 && FloatToAmount(cfg.StakeMinAmt) <= 0 {
+		sdk.Abort("min stake is below the minimum representable amount")
 	}
 	cfg.MembershipNftPayloadFormat = normalizeMembershipPayloadFormat(cfg.MembershipNftPayloadFormat)
 }
@@ -421,7 +490,11 @@ func parsePayoutField(val string) []PayoutEntry {
 		}
 		asset = AssetFromString(assetStr)
 		amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
+		if amount <= 0 {
+			sdk.Abort("payout amount must be positive")
+		}
 		addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
+		validateAddress(addr)
 
 		payouts = append(payouts, PayoutEntry{Address: addr, Amount: amount, Asset: asset})
 	}
@@ -457,7 +530,9 @@ func parseAddressList(val string) []sdk.Address {
 			continue
 		}
 		seen[part] = struct{}{}
-		addresses = append(addresses, AddressFromString(part))
+		addr := AddressFromString(part)
+		validateAddress(addr)
+		addresses = append(addresses, addr)
 	}
 	if len(addresses) == 0 {
 		return nil

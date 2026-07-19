@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"okinoko_dao/sdk"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,15 +18,22 @@ func CreateProposal(payload *string) *string {
 	requireInitialized()
 	input := decodeCreateProposalArgs(payload)
 
+	// Reject semantically-conflicting owner directives: with both present the final
+	// owner would depend on map-iteration order (a consensus hazard).
+	if input.ProposalOutcome != nil && input.ProposalOutcome.Meta != nil {
+		_, hasUpdate := input.ProposalOutcome.Meta["update_owner"]
+		_, hasRemove := input.ProposalOutcome.Meta["remove_owner"]
+		if hasUpdate && hasRemove {
+			sdk.Abort("conflicting owner directives (update_owner and remove_owner)")
+		}
+	}
+
 	caller := getSenderAddress()
 	callerStr := caller.String()
 	callerAddr := caller
 	prj := loadProject(input.ProjectID)
 	if prj.Paused {
-		if input.ProposalOutcome == nil || input.ProposalOutcome.Meta == nil {
-			sdk.Abort("project is paused")
-		}
-		if !allowsPauseMeta(input.ProposalOutcome.Meta) {
+		if input.ProposalOutcome == nil || !outcomeIsPauseSafe(input.ProposalOutcome) {
 			sdk.Abort("project is paused")
 		}
 	}
@@ -65,6 +73,11 @@ func CreateProposal(payload *string) *string {
 		duration = input.ProposalDuration
 	} else {
 		duration = prj.Config.ProposalDurationHours
+	}
+	// Cap duration so CreatedAt + duration*3600 cannot overflow int64 and push the
+	// deadline into the past (which would make the proposal tallyable immediately).
+	if duration > MaxDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
 	}
 
 	now := nowUnix()
@@ -169,7 +182,6 @@ func TallyProposal(proposalId *string) *string {
 
 	// find best option (on tie, higher index wins)
 	var totalVotes float64
-	var voterCount uint64
 	highestOptionId := -1
 	highestOptionValue := float64(0)
 
@@ -177,13 +189,16 @@ func TallyProposal(proposalId *string) *string {
 	for i, opt := range opts {
 		weight := AmountToFloat(opt.WeightTotal)
 		totalVotes += weight
-		voterCount += opt.VoterCount
 
 		if weight >= highestOptionValue {
 			highestOptionValue = weight
 			highestOptionId = i
 		}
 	}
+
+	// Distinct voters — a ballot counts once for quorum no matter how many options
+	// it selected (per-option VoterCount would over-count multi-select ballots).
+	voterCount := prpsl.VoterCount
 
 	// default to failed
 	prpsl.State = ProposalFailed
@@ -194,16 +209,24 @@ func TallyProposal(proposalId *string) *string {
 		quorumThreshold := uint64(math.Ceil(percentageOf(float64(prpsl.MemberCountSnapshot), prj.Config.QuorumPercent)))
 		// Check quorum
 		quorumMet := voterCount >= quorumThreshold
-		// Check threshold (fraction of total stake at creation)
-		denom := AmountToFloat(prpsl.StakeSnapshot)
+		// Check threshold. Democratic projects weigh each member as one unit, so the
+		// denominator is the member count at creation; stake projects use total stake.
+		var denom float64
+		if prj.Config.VotingSystem == VotingSystemDemocratic {
+			denom = float64(prpsl.MemberCountSnapshot)
+		} else {
+			denom = AmountToFloat(prpsl.StakeSnapshot)
+		}
 		thresholdMet := denom > 0 && (highestOptionValue/denom) >= (prj.Config.ThresholdPercent/100)
 
 		if quorumMet && thresholdMet {
 			prpsl.ResultOptionID = int32(highestOptionId)
 			if prpsl.IsPoll {
-				prpsl.State = ProposalClosed // polls remain advisory even if yes wins
-			} else {
-				prpsl.State = ProposalPassed // non-polls become executable actions
+				prpsl.State = ProposalClosed // polls stay advisory even if a side wins
+			} else if highestOptionId == ApproveOptionIndex {
+				// Only an APPROVE ("yes") win executes the outcome. A "no" win — or any
+				// non-approve option — is a rejection and must NOT run payouts/meta/ICC.
+				prpsl.State = ProposalPassed
 				execReady := prpsl.CreatedAt + int64(prpsl.DurationHours+prj.Config.ExecutionDelayHours)*3600
 				prpsl.ExecutableAt = execReady
 				emitProposalExecutionDelayEvent(prpsl.ProjectID, prpsl.ID, execReady)
@@ -288,8 +311,15 @@ func ExecuteProposal(proposalID *string) *string {
 			}
 		}
 		if prpsl.Outcome.Meta != nil {
-			// meta change
-			for action, value := range prpsl.Outcome.Meta {
+			// meta change — iterate keys in sorted order so every validator applies
+			// them (and emits events) in an identical, deterministic sequence.
+			metaKeys := make([]string, 0, len(prpsl.Outcome.Meta))
+			for k := range prpsl.Outcome.Meta {
+				metaKeys = append(metaKeys, k)
+			}
+			sort.Strings(metaKeys)
+			for _, action := range metaKeys {
+				value := prpsl.Outcome.Meta[action]
 				switch action {
 				// todo: add more
 				case "update_threshold":
@@ -297,7 +327,8 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid threshold update")
 					}
-					if v < MinThresholdPercent || v > MaxThresholdPercent {
+					// positive-form bound also rejects NaN (all NaN comparisons are false)
+					if !(v >= MinThresholdPercent && v <= MaxThresholdPercent) {
 						sdk.Abort(fmt.Sprintf("threshold must be between %.0f%% and %.0f%%", MinThresholdPercent, MaxThresholdPercent))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "threshold", fmt.Sprintf("%f", prj.Config.ThresholdPercent), fmt.Sprintf("%f", v))
@@ -309,7 +340,7 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid quorum update")
 					}
-					if v < MinQuorumPercent || v > MaxQuorumPercent {
+					if !(v >= MinQuorumPercent && v <= MaxQuorumPercent) {
 						sdk.Abort(fmt.Sprintf("quorum must be between %.0f%% and %.0f%%", MinQuorumPercent, MaxQuorumPercent))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "quorum", fmt.Sprintf("%f", prj.Config.QuorumPercent), fmt.Sprintf("%f", v))
@@ -324,6 +355,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if v < MinProposalDurationHours {
 						sdk.Abort(fmt.Sprintf("proposal duration must be at least %d hour(s)", MinProposalDurationHours))
 					}
+					if v > MaxDurationHours {
+						sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalDuration", fmt.Sprintf("%d", prj.Config.ProposalDurationHours), value)
 					prj.Config.ProposalDurationHours = v
 					metaChanged = true
@@ -332,6 +366,9 @@ func ExecuteProposal(proposalID *string) *string {
 					v, err := strconv.ParseUint(value, 10, 64)
 					if err != nil {
 						sdk.Abort("invalid execution delay update")
+					}
+					if v > MaxDurationHours {
+						sdk.Abort(fmt.Sprintf("execution delay must not exceed %d hours", MaxDurationHours))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "executionDelay", fmt.Sprintf("%d", prj.Config.ExecutionDelayHours), value)
 					prj.Config.ExecutionDelayHours = v
@@ -342,6 +379,9 @@ func ExecuteProposal(proposalID *string) *string {
 					if err != nil {
 						sdk.Abort("invalid leave cooldown update")
 					}
+					if v > MaxDurationHours {
+						sdk.Abort(fmt.Sprintf("leave cooldown must not exceed %d hours", MaxDurationHours))
+					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "leaveCooldown", fmt.Sprintf("%d", prj.Config.LeaveCooldownHours), value)
 					prj.Config.LeaveCooldownHours = v
 					metaChanged = true
@@ -350,6 +390,15 @@ func ExecuteProposal(proposalID *string) *string {
 					v, err := strconv.ParseFloat(value, 64)
 					if err != nil {
 						sdk.Abort("invalid proposal cost update")
+					}
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						sdk.Abort("invalid proposal cost update")
+					}
+					if v < 0 {
+						sdk.Abort("proposal cost cannot be negative")
+					}
+					if v > 0 && FloatToAmount(v) <= 0 {
+						sdk.Abort("proposal cost is below the minimum representable amount")
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalCost", fmt.Sprintf("%f", prj.Config.ProposalCost), fmt.Sprintf("%f", v))
 					prj.Config.ProposalCost = v
@@ -408,6 +457,7 @@ func ExecuteProposal(proposalID *string) *string {
 					stateChanged = true
 				case "update_owner":
 					newOwnerAddr := AddressFromString(value)
+					validateAddress(newOwnerAddr)
 					if _, exists := loadMember(prj.ID, newOwnerAddr); !exists {
 						sdk.Abort("new owner must be a member")
 					}
@@ -424,6 +474,9 @@ func ExecuteProposal(proposalID *string) *string {
 					metaChanged = true
 					stateChanged = true
 				case "update_url":
+					if len(value) > MaxURLLength {
+						sdk.Abort(fmt.Sprintf("url exceeds maximum length of %d characters", MaxURLLength))
+					}
 					prev := prj.URL
 					prj.URL = normalizeOptionalField(value)
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "url", prev, prj.URL)
@@ -494,7 +547,16 @@ func ExecuteProposal(proposalID *string) *string {
 				var opts *sdk.ContractCallOptions
 				if len(icc.Assets) > 0 {
 					intents := make([]sdk.Intent, 0, len(icc.Assets))
-					for asset, amount := range icc.Assets {
+					// Deterministic asset order so every validator builds identical
+					// intents and treasury deductions.
+					assetKeys := make([]string, 0, len(icc.Assets))
+					for a := range icc.Assets {
+						assetKeys = append(assetKeys, string(a))
+					}
+					sort.Strings(assetKeys)
+					for _, ak := range assetKeys {
+						asset := sdk.Asset(ak)
+						amount := icc.Assets[asset]
 						// Check treasury balance
 						treasuryBalance := getTreasuryBalance(prj.ID, asset)
 						if treasuryBalance < amount {
@@ -659,10 +721,25 @@ func allowsPauseMeta(meta map[string]string) bool {
 	return false
 }
 
-// proposalAllowsExecutionWhilePaused reuses the meta helper so pause votes can execute safely.
+// proposalAllowsExecutionWhilePaused reuses the pause-safe check so pause votes can
+// execute while frozen — but a payout/ICC rider must never ride the exception.
 func proposalAllowsExecutionWhilePaused(prpsl *Proposal) bool {
-	if prpsl == nil || prpsl.Outcome == nil || prpsl.Outcome.Meta == nil {
+	if prpsl == nil || prpsl.Outcome == nil {
 		return false
 	}
-	return allowsPauseMeta(prpsl.Outcome.Meta)
+	return outcomeIsPauseSafe(prpsl.Outcome)
+}
+
+// outcomeIsPauseSafe returns true only for outcomes that may be created/executed
+// while the project is paused: a single pause/ownership meta key and NO treasury
+// movement (no payout, no inter-contract call). Without the payout/ICC guard a
+// toggle_pause proposal could smuggle a treasury drain past the freeze.
+func outcomeIsPauseSafe(outcome *ProposalOutcome) bool {
+	if outcome == nil || outcome.Meta == nil {
+		return false
+	}
+	if len(outcome.Payout) > 0 || len(outcome.ICC) > 0 {
+		return false
+	}
+	return allowsPauseMeta(outcome.Meta)
 }

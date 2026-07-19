@@ -209,7 +209,7 @@ func JoinProject(projectID *string) *string {
 	// Save initial stake history
 	saveStakeHistory(prj.ID, callerAddr, depositAmount, now, 0)
 	prj.MemberCount++
-	prj.StakeTotal += depositAmount
+	prj.StakeTotal = safeAddAmount(prj.StakeTotal, depositAmount)
 	saveProjectFinance(prj)
 	emitJoinedEvent(prj.ID, AddressToString(callerAddr))
 	if depositAmount > 0 {
@@ -225,6 +225,9 @@ func JoinProject(projectID *string) *string {
 func WhitelistMembers(payload *string) *string {
 	requireInitialized()
 	projectID, addresses := decodeWhitelistPayload(payload)
+	// NOTE: the direct owner path is intentionally uncapped (owner is trusted; see
+	// TestOwnerWhitelistAddNoLimit / TestOwnerWhitelistAdd100Addresses). Only the
+	// proposal meta path (whitelist_add) enforces MaxWhitelistAddresses.
 	prj := loadProject(projectID)
 	caller := getSenderAddress()
 	if !hasOwner(prj) {
@@ -367,6 +370,11 @@ func AddFunds(payload *string) *string {
 	requireInitialized()
 	input := decodeAddFundsArgs(payload)
 	prj := loadProject(input.ProjectID)
+	// Treasury donations are allowed while paused, but increasing stake (voting
+	// weight) is not — that mirrors the Join/Leave pause guards.
+	if prj.Paused && input.ToStake {
+		sdk.Abort("cannot add stake while project is paused")
+	}
 	caller := getSenderAddress()
 	callerAddr := caller
 
@@ -399,12 +407,12 @@ func AddFunds(payload *string) *string {
 		if input.ToStake && ta.Token == prj.FundsAsset {
 			// Main project asset goes to stake
 			member := stakingMember
-			member.Stake += depositAmount
+			member.Stake = safeAddAmount(member.Stake, depositAmount)
 			member.LastActionAt = now
 			member.StakeIncrement++
 			saveMember(prj.ID, member)
 			saveStakeHistory(prj.ID, callerAddr, member.Stake, now, member.StakeIncrement)
-			prj.StakeTotal += depositAmount
+			prj.StakeTotal = safeAddAmount(prj.StakeTotal, depositAmount)
 			stakeAdded = true
 			emitFundsAdded(prj.ID, AddressToString(callerAddr), AmountToFloat(depositAmount), ta.Token.String(), true)
 		} else {
@@ -464,6 +472,9 @@ func kickMember(prj *Project, addr sdk.Address) {
 	if prj.MemberCount > 0 {
 		prj.MemberCount--
 	}
+	if prj.StakeTotal < withdraw {
+		sdk.Abort("accounting error: stake total mismatch")
+	}
 	prj.StakeTotal -= withdraw
 
 	// Events
@@ -497,6 +508,7 @@ func TransferProjectOwnership(payload *string) *string {
 	caller := getSenderAddress()
 	callerAddr := caller
 	newOwnerAddr := AddressFromString(newOwnerStr)
+	validateAddress(newOwnerAddr)
 	prj := loadProject(id)
 	if !hasOwner(prj) {
 		sdk.Abort("project is autonomous - no owner to transfer")

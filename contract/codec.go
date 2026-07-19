@@ -245,6 +245,7 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeVarInt(int64(prpsl.ResultOptionID))
 	w.writeInt64(prpsl.ExecutableAt)
 	w.writeString(prpsl.URL)
+	w.writeVarUint(prpsl.VoterCount)
 	return w.bytes()
 }
 
@@ -404,7 +405,10 @@ func (r *binReader) readString() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if r.pos+int(l) > len(r.data) {
+	// Compare as uint64 before converting to int: on 32-bit wasm int(l) can wrap
+	// negative for a crafted length prefix, defeating the bounds check and panicking
+	// on the slice. Reject any length that can't fit in the remaining buffer.
+	if l > uint64(len(r.data)-r.pos) {
 		return "", errors.New("unexpected EOF")
 	}
 	s := string(r.data[r.pos : r.pos+int(l)])
@@ -915,24 +919,9 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 			return nil, err
 		}
 	}
-	// Skip old voters list if present (backwards compatible)
+	// Distinct voter count (added for correct quorum accounting).
 	if r.pos < len(r.data) {
-		voterCount, err := r.readVarUint()
-		if err != nil {
-			return nil, err
-		}
-		// Skip voter addresses
-		for i := uint64(0); i < voterCount; i++ {
-			_, err := r.readString()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	// Skip old total voted weight if present (backwards compatible)
-	if r.pos < len(r.data) {
-		_, err = r.readAmount()
-		if err != nil {
+		if prpsl.VoterCount, err = r.readVarUint(); err != nil {
 			return nil, err
 		}
 	}
