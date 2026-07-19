@@ -124,7 +124,7 @@ type Member struct {
 	// Vote eligibility compares it against Proposal.JoinSeqSnapshot instead of
 	// comparing timestamps: every transaction in a block shares one block
 	// timestamp, so JoinedAt cannot distinguish "joined before this proposal" from
-	// "joined after it in the same block". 0 means a pre-upgrade member.
+	// "joined after it in the same block". The founding member is 0.
 	JoinSeq uint64
 }
 
@@ -213,8 +213,7 @@ type Proposal struct {
 	CostPaid            Amount // proposal cost actually charged at creation (refund basis)
 	// JoinSeqSnapshot is the project's join counter at creation time. A member may
 	// vote only if their JoinSeq is strictly below it, which matches exactly the
-	// membership captured by MemberCountSnapshot/StakeSnapshot. 0 means a
-	// pre-upgrade proposal, for which the legacy timestamp check still applies.
+	// membership captured by MemberCountSnapshot/StakeSnapshot.
 	JoinSeqSnapshot uint64
 }
 

@@ -101,8 +101,7 @@ func CreateProject(payload *string) *string {
 		LastActionAt:   now,
 		Reputation:     0,
 		StakeIncrement: 0,
-		// The founding member always takes sequence 1, so the counter starts at 2
-		// and every later joiner sorts strictly after them.
+		// The founding member takes sequence 0; every later joiner sorts after them.
 		JoinSeq: allocateJoinSeq(&prj),
 	}
 	saveMember(prj.ID, &creatorMember)
@@ -350,17 +349,9 @@ func projectJoinSeqKey(projectID uint64) string {
 
 // currentJoinSeq returns the sequence number the NEXT member would receive, which
 // is also the eligibility cutoff a proposal created right now must snapshot.
-//
-// A stored 0 means the counter has never been written — either a brand-new project
-// or one created before this upgrade. In both cases we seed past every existing
-// member: pre-upgrade Member records decode JoinSeq == 0, so starting at
-// MemberCount+1 guarantees every sequence this contract issues sorts strictly after
-// them, and legacy members keep voting on new proposals as they should.
+// A fresh project starts at 0, so its founding member takes sequence 0.
 func currentJoinSeq(prj *Project) uint64 {
-	if seq := getCount(projectJoinSeqKey(prj.ID)); seq != 0 {
-		return seq
-	}
-	return uint64(prj.MemberCount) + 1
+	return getCount(projectJoinSeqKey(prj.ID))
 }
 
 // allocateJoinSeq consumes and returns the next join sequence number.

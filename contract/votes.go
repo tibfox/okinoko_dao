@@ -116,13 +116,7 @@ func VoteProposal(payload *string) *string {
 	// vote against a stale denominator — total weight over 100%, honest members
 	// never needed. A `>=` comparison would instead disenfranchise the former.
 	// Timestamps simply cannot order events within a block; the join sequence can.
-	if prpsl.JoinSeqSnapshot > 0 {
-		if member.JoinSeq >= prpsl.JoinSeqSnapshot {
-			sdk.Abort("proposal was created before joining the project")
-		}
-	} else if member.JoinedAt > prpsl.CreatedAt {
-		// Pre-upgrade proposal (no snapshot recorded): fall back to the legacy check
-		// so proposals already open at upgrade time stay votable.
+	if member.JoinSeq >= prpsl.JoinSeqSnapshot {
 		sdk.Abort("proposal was created before joining the project")
 	}
 

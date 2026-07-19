@@ -556,12 +556,12 @@ func decodeMember(r *binReader) (Member, error) {
 			return m, err
 		}
 	}
-	// Read JoinSeq (backwards compatible - 0 means a pre-upgrade member, which
-	// sorts before every sequence number this contract now issues)
-	if r.pos < len(r.data) {
-		if m.JoinSeq, err = r.readUint64(); err != nil {
-			return m, err
-		}
+	// JoinSeq is REQUIRED, not trailing-optional: the encoder always writes it and
+	// there is no pre-upgrade state anywhere. Defaulting a short record to 0 would
+	// silently present the member as the project's founder — the earliest possible
+	// sequence — and hand them voting rights on every proposal. Fail instead.
+	if m.JoinSeq, err = r.readUint64(); err != nil {
+		return m, err
 	}
 	return m, nil
 }
@@ -941,12 +941,10 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 			return nil, err
 		}
 	}
-	// Join-sequence snapshot for vote eligibility. 0 (absent) marks a pre-upgrade
-	// proposal, for which VoteProposal falls back to the legacy timestamp check.
-	if r.pos < len(r.data) {
-		if prpsl.JoinSeqSnapshot, err = r.readVarUint(); err != nil {
-			return nil, err
-		}
+	// Join-sequence snapshot for vote eligibility. REQUIRED — see decodeMember: a
+	// missing snapshot would default to 0 and reject every member from voting.
+	if prpsl.JoinSeqSnapshot, err = r.readVarUint(); err != nil {
+		return nil, err
 	}
 	return prpsl, nil
 }
