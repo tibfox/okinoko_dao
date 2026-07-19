@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"okinoko_dao/sdk"
+	"sort"
 )
 
 // -----------------------------------------------------------------------------
@@ -189,9 +190,22 @@ func VoteProposal(payload *string) *string {
 		option.VoterCount++
 	}
 
-	// Save all modified options
-	for idx32, option := range optionCache {
-		saveProposalOption(prpsl.ID, idx32, option)
+	// Save all modified options in a deterministic order.
+	//
+	// Go map iteration order differs per node. This is currently harmless — the
+	// host's state store is itself a map and the gas meter charges
+	// max(0, len(new)-len(prev)), which is 0 for every option re-write since only
+	// the fixed-width weight/count fields change. But ContractSession tracks a
+	// running MaxSize that IS order-sensitive once any size-decreasing write is
+	// interleaved, so relying on that is a latent consensus hazard. Sort the keys:
+	// the cost is negligible and it removes the dependency entirely.
+	idxs := make([]uint32, 0, len(optionCache))
+	for idx32 := range optionCache {
+		idxs = append(idxs, idx32)
+	}
+	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
+	for _, idx32 := range idxs {
+		saveProposalOption(prpsl.ID, idx32, optionCache[idx32])
 	}
 
 	// Voting re-arms the leave cooldown: a pre-armed "exit requested" would

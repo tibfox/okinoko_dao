@@ -54,6 +54,14 @@ const (
 	MaxAddressLength = 128
 	// MaxKickAddresses limits the number of addresses per kick_member operation.
 	MaxKickAddresses = 50
+	// MaxMetaLength bounds the outcome-meta blob. It must accommodate the largest
+	// LEGITIMATE directive, which is whitelist_add/kick_member carrying
+	// MaxWhitelistAddresses (50) x MaxAddressLength (128) plus separators, so it is
+	// necessarily much larger than MaxDescriptionLength.
+	MaxMetaLength = 8192
+	// MaxICCCalls limits inter-contract calls per proposal. Each one is an external
+	// call plus a treasury debit executed inside a single ExecuteProposal.
+	MaxICCCalls = 20
 	// MinProposalDurationHours enforces a minimum voting period.
 	MinProposalDurationHours = 1
 	// MaxDurationHours caps execution delay and leave cooldown.

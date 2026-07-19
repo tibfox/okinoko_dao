@@ -272,3 +272,37 @@ func TestBreak_CancelRefundsOriginalCostAfterRaise(t *testing.T) {
 	assert.Equal(t, before+1000, hiveBal(ct, "hive:someoneelse"),
 		"cancel refunded the CURRENT proposal cost (5.000) instead of the 1.000 actually paid")
 }
+
+// R13-10: the previously-unbounded list fields are now capped. Each was verified
+// to be accepted before the cap (200 ICC entries and 1000 ballot choices both
+// persisted into state for a single fee).
+func TestBreak_ListFieldsAreBounded(t *testing.T) {
+	ct := SetupContractTest()
+	pid := createDefaultProject(t, ct)
+	joinProjectMember(t, ct, pid, "hive:someoneelse")
+
+	// >MaxICCCalls inter-contract calls
+	var icc []string
+	for i := 0; i < 25; i++ {
+		icc = append(icc, fmt.Sprintf("%s|noop|x", MockID))
+	}
+	fields := []string{strconv.FormatUint(pid, 10), "many-icc", "d", "1", "", "0", "", "", "", "",
+		strings.Join(icc, ";")}
+	_, ok := createProposalRaw(ct, fields, "hive:someone", "icc")
+	assert.False(t, ok, "an unbounded ICC list was accepted")
+
+	// >MaxProposalOptions ballot choices
+	propID := createPollProposal(t, ct, pid, "1", "", "")
+	var choices []string
+	for i := 0; i < 1000; i++ {
+		choices = append(choices, "1")
+	}
+	res := voteRaw(ct, propID, "hive:someone", strings.Join(choices, ","), "v")
+	assert.False(t, res.Success, "a 1000-choice ballot was accepted")
+
+	// oversize outcome-meta blob
+	big := []string{strconv.FormatUint(pid, 10), "big-meta", "d", "1", "", "0", "",
+		"update_url=" + strings.Repeat("x", 9000), "", "", ""}
+	_, ok = createProposalRaw(ct, big, "hive:someone", "meta")
+	assert.False(t, ok, "an oversize outcome-meta blob was accepted")
+}

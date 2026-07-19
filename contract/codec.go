@@ -632,6 +632,13 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A length prefix is attacker-controlled: allocate only after bounding it
+	// against the same limit the payload parser enforces, so a crafted varint
+	// cannot request an arbitrarily large allocation (a 26-byte input OOM-killed
+	// a fuzz harness here).
+	if count > uint64(MaxPayoutReceivers) {
+		return nil, errors.New("length prefix exceeds maximum")
+	}
 	// Read payout slice (supports multiple entries per address with different assets)
 	payouts := make([]PayoutEntry, 0, count)
 	for i := uint64(0); i < count; i++ {
@@ -656,6 +663,9 @@ func decodeProposalOutcome(r *binReader) (*ProposalOutcome, error) {
 		iccCount, err := r.readVarUint()
 		if err != nil {
 			return nil, err
+		}
+		if iccCount > uint64(MaxICCCalls) {
+			return nil, errors.New("length prefix exceeds maximum")
 		}
 		if iccCount > 0 {
 			iccCalls = make([]InterContractCall, iccCount)
@@ -994,6 +1004,13 @@ func DecodeCreateProposalArgs(data []byte) (*CreateProposalArgs, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A length prefix is attacker-controlled: allocate only after bounding it
+	// against the same limit the payload parser enforces, so a crafted varint
+	// cannot request an arbitrarily large allocation (a 26-byte input OOM-killed
+	// a fuzz harness here).
+	if count > uint64(MaxProposalOptions) {
+		return nil, errors.New("length prefix exceeds maximum")
+	}
 	args.OptionsList = make([]ProposalOptionInput, count)
 	for i := uint64(0); i < count; i++ {
 		if args.OptionsList[i].Text, err = r.readString(); err != nil {
@@ -1032,6 +1049,13 @@ func DecodeVoteProposalArgs(data []byte) (*VoteProposalArgs, error) {
 	count, err := r.readVarUint()
 	if err != nil {
 		return nil, err
+	}
+	// A length prefix is attacker-controlled: allocate only after bounding it
+	// against the same limit the payload parser enforces, so a crafted varint
+	// cannot request an arbitrarily large allocation (a 26-byte input OOM-killed
+	// a fuzz harness here).
+	if count > uint64(MaxProposalOptions) {
+		return nil, errors.New("length prefix exceeds maximum")
 	}
 	args.Choices = make([]uint, count)
 	for i := uint64(0); i < count; i++ {

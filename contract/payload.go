@@ -336,6 +336,13 @@ func parseChoiceField(val string) []uint {
 	raw := strings.FieldsFunc(val, func(r rune) bool {
 		return r == ',' || r == ';'
 	})
+	// Bound the ballot size. Selecting the same option repeatedly is deduped later,
+	// but the RAW list is what gets stored in the vote record, so an unbounded list
+	// (1000+ entries was accepted) is permanent state bloat for a single vote fee.
+	// No ballot can meaningfully name more distinct options than exist.
+	if len(raw) > MaxProposalOptions {
+		sdk.Abort("too many choices")
+	}
 	choices := make([]uint, 0, len(raw))
 	for _, part := range raw {
 		part = strings.TrimSpace(part)
@@ -371,6 +378,12 @@ func parseMetadataField(val string) map[string]string {
 	}
 	if val == "" {
 		return nil
+	}
+	// Bound the outcome-meta blob like every other free-form field. It is stored on
+	// the proposal record that each vote and tally reloads, so an unbounded value is
+	// a gas-griefing vector against every later voter, not just the author.
+	if len(val) > MaxMetaLength {
+		sdk.Abort(fmt.Sprintf("proposal meta exceeds maximum length of %d characters", MaxMetaLength))
 	}
 	meta := map[string]string{}
 	pairs := strings.Split(val, ";")
@@ -656,6 +669,13 @@ func parseICCField(val string) []InterContractCall {
 
 	calls := []InterContractCall{}
 	entries := strings.Split(val, ";")
+	// Bound the ICC list like payouts (MaxPayoutReceivers) and options
+	// (MaxProposalOptions). Every entry is executed inside a single
+	// ExecuteProposal, each with its own external call and treasury debit, and all
+	// of them are stored on the proposal record. 200 entries were accepted before.
+	if len(entries) > MaxICCCalls {
+		sdk.Abort(fmt.Sprintf("ICC cannot exceed %d calls per proposal", MaxICCCalls))
+	}
 
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
