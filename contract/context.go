@@ -109,25 +109,30 @@ func getAllTransferAllows() []TransferAllow {
 }
 
 // getActorAddress returns the authenticated identity for the current call: the
-// IMMEDIATE caller (msg.caller), not the original transaction signer (msg.sender).
+// ORIGINAL TRANSACTION SIGNER (msg.sender), not the immediate caller.
 //
-// This is deliberate and security-critical. The host propagates msg.sender
-// verbatim into nested contract call frames, while msg.caller becomes
-// "contract:<id>". Authorizing on msg.sender would therefore be a confused-deputy
-// hole: any third-party contract a member called could call back into this one in
-// the same transaction and act with that member's full authority — transferring
-// their project away, casting their stake, cancelling their proposals.
+// This is a DELIBERATE product decision, not an oversight. It enables delegation:
+// a member can call a helper/integration contract, and that contract acts on the
+// DAO *as the member* — the member keeps their own membership, stake and votes
+// even when interacting through tooling. Authorizing on msg.caller would instead
+// make the helper contract itself the member, which is not the intended UX.
 //
-// Using msg.caller keeps contract-to-contract calls fully supported: a calling
-// contract simply acts as ITSELF ("contract:<id>"), so it can join, hold stake,
-// own a project and vote in its own right — but it can never impersonate the user
-// who invoked it. For a direct user transaction the host sets caller == sender,
-// so ordinary accounts are unaffected. (Same convention as magi_token-contract.)
+// ACCEPTED RISK — confused deputy. The host propagates msg.sender verbatim into
+// nested contract call frames (execution-context.go: Caller becomes
+// "contract:<id>", Sender is passed through unchanged). Consequently ANY contract
+// a member calls can, within that same transaction, call back into this DAO and
+// act with that member's full authority: transfer their project away, cast their
+// stake, cancel their proposals, force a leave.
+//
+// The mitigation is social, not technical: members must only interact with
+// contracts they trust, exactly as with an ERC-20 approval. If that assumption
+// ever becomes untenable, the fix is to authorize on env.Caller instead (a
+// one-line change here) — at the cost of the delegation feature above.
+//
+// NOTE: this does NOT re-open the ICC re-entrancy drain. That was fixed
+// independently in ExecuteProposal by committing the terminal state before any
+// payout or external call (checks-effects-interactions), so a re-entrant frame
+// can no longer observe ProposalPassed and replay a payout.
 func getActorAddress() sdk.Address {
-	env := currentEnv()
-	if env.Caller != "" {
-		return env.Caller
-	}
-	// Host did not supply msg.caller — fall back to the signer.
-	return env.Sender.Address
+	return currentEnv().Sender.Address
 }

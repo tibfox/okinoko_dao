@@ -261,21 +261,26 @@ so a hostile ICC callee could re-enter `proposal_execute`, still observe
 **Fixed:** the terminal state is committed *before* any payout/ICC
 (checks-effects-interactions).
 
-### R2 — CRITICAL: `msg.sender` confused deputy
+### R2 — ACCEPTED RISK (not fixed by decision): `msg.sender` confused deputy
 The host propagates `Sender` verbatim into nested call frames
 (`execution-context.go:640-641`: `Caller: "contract:"+id`, `Sender: ctx.env.Sender`).
-Authorizing on `msg.sender` alone therefore meant **any** contract a member called
-could call back into the DAO within the same tx and act with that member's full
-authority — steal project ownership, cast their stake, cancel proposals, force a
-leave. It also defeated the ICC creator-only guard, enabling R1.
-**Fixed:** identity is now taken from **`msg.caller`** (renamed `getActorAddress()`),
-matching the convention magi_token-contract adopted. Contract-to-contract calls remain
-fully supported — a calling contract simply acts as ITSELF (`contract:<id>`), so it can
-join, hold stake, own a project and vote in its own right, but can never impersonate the
-user who invoked it. For a direct user transaction the host sets `caller == sender`
-(`transactions.go:148-149`), so ordinary accounts are unaffected.
-(An initial fix required `caller == sender`, which would have blocked all contract
-callers; that was wrong for this contract's intended use and was replaced.)
+Authorizing on `msg.sender` therefore means **any** contract a member calls can call
+back into the DAO within the same transaction and act with that member's full
+authority — steal project ownership, cast their stake, cancel their proposals, force
+a leave.
+
+**Decision: keep `msg.sender` (identity = original signer).** This is deliberate and
+enables delegation: a member can call a helper/integration contract and have it act on
+the DAO *as the member*, keeping their own membership, stake and votes. Authorizing on
+`msg.caller` would make the helper contract itself the member, which is not the
+intended UX. The mitigation is social, not technical — members must only interact with
+contracts they trust, exactly as with an ERC-20 approval. Reversing this is a one-line
+change in `getActorAddress()` (`context.go`) if the assumption ever becomes untenable.
+
+**This does NOT re-open the R1 treasury drain.** R1 was fixed independently by
+committing the terminal state before any payout/external call, so a re-entrant frame
+can no longer observe `ProposalPassed` and replay a payout — regardless of whose
+identity the re-entrant frame carries.
 
 ### R3 — HIGH: ICC transfer intents used the wrong arg names (found by 3 reviewers)
 The host reads `transfer.allow` as `Args["token"]` + `Args["limit"]` and *silently

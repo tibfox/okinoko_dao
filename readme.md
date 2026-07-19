@@ -224,11 +224,15 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 - `toggle_pause=1`
 - `kick_member=<address1,address2,...>` - Remove members and refund their stake (cannot kick owner or members with active payouts). Existing votes on active proposals remain valid.
 
-**Caller identity:** authorization uses `msg.caller` (the immediate caller), not the
-original transaction signer. A user calling the DAO directly acts as themselves. Another
-**contract** may also call the DAO — it acts as *itself* (`contract:<id>`) and can join,
-stake, own a project and vote in its own right. A contract can never act on behalf of the
-user who invoked it, which prevents a hostile intermediary from spending your membership.
+**Caller identity — read this before integrating.** Authorization uses `msg.sender`
+(the original transaction signer), not the immediate caller. This is deliberate: it lets
+a member call a helper/integration contract and have that contract act on the DAO **as
+the member**, so membership, stake and votes stay with the user rather than the tooling.
+
+The trade-off is that **any contract you call can act as you on this DAO** for the
+duration of that transaction — joining, voting your stake, cancelling your proposals, or
+transferring a project you own. Treat calling a contract like granting an approval: only
+interact with contracts you trust.
 
 **Additional enforced limits (not otherwise listed above):**
 
