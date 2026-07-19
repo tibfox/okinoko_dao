@@ -146,6 +146,7 @@ func encodeMember(w *binWriter, m *Member) {
 	w.writeInt64(m.ExitRequested)
 	w.writeInt64(m.Reputation)
 	w.writeUint64(m.StakeIncrement)
+	w.writeUint64(m.JoinSeq)
 }
 
 // EncodeMember packs a Member into bytes so storage stays lean and no json noise leaks.
@@ -247,6 +248,7 @@ func EncodeProposal(prpsl *Proposal) []byte {
 	w.writeString(prpsl.URL)
 	w.writeVarUint(prpsl.VoterCount)
 	w.writeAmount(prpsl.CostPaid)
+	w.writeVarUint(prpsl.JoinSeqSnapshot)
 	return w.bytes()
 }
 
@@ -551,6 +553,13 @@ func decodeMember(r *binReader) (Member, error) {
 	// Read StakeIncrement (backwards compatible - defaults to 0 if missing)
 	if r.pos < len(r.data) {
 		if m.StakeIncrement, err = r.readUint64(); err != nil {
+			return m, err
+		}
+	}
+	// Read JoinSeq (backwards compatible - 0 means a pre-upgrade member, which
+	// sorts before every sequence number this contract now issues)
+	if r.pos < len(r.data) {
+		if m.JoinSeq, err = r.readUint64(); err != nil {
 			return m, err
 		}
 	}
@@ -929,6 +938,13 @@ func DecodeProposal(data []byte) (*Proposal, error) {
 	// Cost actually charged at creation (refund basis).
 	if r.pos < len(r.data) {
 		if prpsl.CostPaid, err = r.readAmount(); err != nil {
+			return nil, err
+		}
+	}
+	// Join-sequence snapshot for vote eligibility. 0 (absent) marks a pre-upgrade
+	// proposal, for which VoteProposal falls back to the legacy timestamp check.
+	if r.pos < len(r.data) {
+		if prpsl.JoinSeqSnapshot, err = r.readVarUint(); err != nil {
 			return nil, err
 		}
 	}

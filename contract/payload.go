@@ -90,7 +90,7 @@ func decodeCreateProposalArgs(payload *string) *CreateProposalArgs {
 		}
 		return ""
 	}
-	projectID := parseUintField(get(0), "project id")
+	projectID := parseEntityIDField(get(0), "project id")
 	name := strings.TrimSpace(get(1))
 	description := strings.TrimSpace(get(2))
 	if len(name) > MaxNameLength {
@@ -152,7 +152,7 @@ func decodeVoteProposalArgs(payload *string) *VoteProposalArgs {
 	if len(parts) < 2 {
 		sdk.Abort("vote payload requires proposalId|choices")
 	}
-	proposalID := parseUintField(parts[0], "proposal id")
+	proposalID := parseEntityIDField(parts[0], "proposal id")
 	choices := parseChoiceField(parts[1])
 	return &VoteProposalArgs{
 		ProposalID: proposalID,
@@ -167,7 +167,7 @@ func decodeAddFundsArgs(payload *string) *AddFundsArgs {
 	if len(parts) < 2 {
 		sdk.Abort("add funds payload requires projectId|toStake")
 	}
-	projectID := parseUintField(parts[0], "project id")
+	projectID := parseEntityIDField(parts[0], "project id")
 	toStake := parseBoolField(parts[1])
 	return &AddFundsArgs{
 		ProjectID: projectID,
@@ -206,6 +206,17 @@ func parseFloatField(val string, field string) float64 {
 	if val == "" {
 		return -1
 	}
+	// strconv.ParseFloat accepts Go literal syntax that a human payload never means:
+	// underscores ("1_0" -> 10) and hex-float forms ("0x1p+6" -> 64). The stored
+	// value then silently disagrees with the text an operator or UI displays. Accept
+	// only plain decimal notation.
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		if (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E' {
+			continue
+		}
+		sdk.Abort(fmt.Sprintf("invalid %s", field))
+	}
 	f, err := strconv.ParseFloat(val, 64)
 	if err != nil {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
@@ -217,6 +228,19 @@ func parseFloatField(val string, field string) float64 {
 		sdk.Abort(fmt.Sprintf("invalid %s", field))
 	}
 	return f
+}
+
+// parseEntityIDField parses a REQUIRED entity id (project / proposal).
+//
+// Unlike parseUintField it refuses an empty field instead of defaulting to 0.
+// Defaulting silently retargeted a truncated or malformed payload at entity 0
+// rather than failing: "|1" voted on proposal 0, and "|false" deposited into
+// project 0. An id is never optional, so absence is an error.
+func parseEntityIDField(val string, field string) uint64 {
+	if strings.TrimSpace(val) == "" {
+		sdk.Abort(fmt.Sprintf("%s is required", field))
+	}
+	return parseUintField(val, field)
 }
 
 // parseUintField is the uint variant used for durations and ids.
@@ -419,8 +443,8 @@ func normalizeProjectConfig(cfg *ProjectConfig) {
 		cfg.ProposalDurationHours = MinProposalDurationHours
 	}
 	// Upper-bound the time fields so value*3600 cannot overflow int64.
-	if cfg.ProposalDurationHours > MaxDurationHours {
-		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	if cfg.ProposalDurationHours > MaxProposalDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxProposalDurationHours))
 	}
 	if cfg.ExecutionDelayHours > MaxDurationHours {
 		sdk.Abort(fmt.Sprintf("execution delay must not exceed %d hours", MaxDurationHours))
@@ -610,7 +634,7 @@ func decodeWhitelistPayload(payload *string) (uint64, []sdk.Address) {
 	if len(parts) < 2 {
 		sdk.Abort("whitelist payload requires projectId|addresses")
 	}
-	projectID := parseUintField(parts[0], "project id")
+	projectID := parseEntityIDField(parts[0], "project id")
 	addresses := parseAddressList(parts[1])
 	if len(addresses) == 0 {
 		sdk.Abort("whitelist payload requires addresses")

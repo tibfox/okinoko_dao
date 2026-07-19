@@ -101,6 +101,9 @@ func CreateProject(payload *string) *string {
 		LastActionAt:   now,
 		Reputation:     0,
 		StakeIncrement: 0,
+		// The founding member always takes sequence 1, so the counter starts at 2
+		// and every later joiner sorts strictly after them.
+		JoinSeq: allocateJoinSeq(&prj),
 	}
 	saveMember(prj.ID, &creatorMember)
 	// Save initial stake history
@@ -204,12 +207,22 @@ func JoinProject(projectID *string) *string {
 		JoinedAt:       now,
 		LastActionAt:   now,
 		StakeIncrement: 0,
+		JoinSeq:        allocateJoinSeq(prj),
 	}
 	saveMember(prj.ID, &newMember)
 	// Save initial stake history
 	saveStakeHistory(prj.ID, callerAddr, depositAmount, now, 0)
-	prj.MemberCount++
-	prj.StakeTotal = safeAddAmount(prj.StakeTotal, depositAmount)
+
+	// Re-read the finance record before mutating it. `prj` was loaded BEFORE
+	// checkNFTMembership above, which makes an sdk.ContractCall into a
+	// PROJECT-CONFIGURED contract; that callee can re-enter this DAO as the joiner
+	// (msg.sender propagates into nested frames) and change MemberCount/StakeTotal.
+	// Incrementing the pre-call snapshot would silently revert its work while
+	// keeping any ledger movement it caused — the same desync class fixed in
+	// ExecuteProposal. Applying the delta to freshly-read state is re-entrancy-safe.
+	fresh := loadProjectFinance(prj.ID)
+	prj.MemberCount = fresh.MemberCount + 1
+	prj.StakeTotal = safeAddAmount(fresh.StakeTotal, depositAmount)
 	saveProjectFinance(prj)
 	emitJoinedEvent(prj.ID, AddressToString(callerAddr))
 	if depositAmount > 0 {
@@ -303,10 +316,14 @@ func LeaveProject(projectID *string) *string {
 		sdk.Abort("cooldown not passed")
 	}
 
-	// refund stake
+	// Refund stake. The transfer is SKIPPED for a zero balance: the host rejects a
+	// zero-value transfer ("amount must be positive"), which would otherwise abort
+	// the whole call and make members of a free-membership project (StakeMinAmt <= 0,
+	// where every member legitimately holds Stake == 0) permanently unable to leave.
 	withdraw := member.Stake
-	mAmount := AmountToInt64(withdraw)
-	sdk.HiveTransfer(caller, mAmount, prj.FundsAsset)
+	if withdraw > 0 {
+		sdk.HiveTransfer(caller, AmountToInt64(withdraw), prj.FundsAsset)
+	}
 
 	// Delete all stake history for this member
 	deleteAllStakeHistory(prj.ID, callerAddr, member.StakeIncrement)
@@ -322,6 +339,35 @@ func LeaveProject(projectID *string) *string {
 	emitLeaveEvent(prj.ID, AddressToString(callerAddr))
 	emitFundsRemoved(prj.ID, AddressToString(callerAddr), AmountToFloat(withdraw), AssetToString(prj.FundsAsset), true)
 	return strptr("exit finished")
+}
+
+// projectJoinSeqKey holds the project's monotonic join counter — the next sequence
+// number to hand out. Kept in its own counter key rather than in ProjectFinance so
+// the join path does not have to re-encode the finance record to allocate one.
+func projectJoinSeqKey(projectID uint64) string {
+	return "count:js:" + UInt64ToString(projectID)
+}
+
+// currentJoinSeq returns the sequence number the NEXT member would receive, which
+// is also the eligibility cutoff a proposal created right now must snapshot.
+//
+// A stored 0 means the counter has never been written — either a brand-new project
+// or one created before this upgrade. In both cases we seed past every existing
+// member: pre-upgrade Member records decode JoinSeq == 0, so starting at
+// MemberCount+1 guarantees every sequence this contract issues sorts strictly after
+// them, and legacy members keep voting on new proposals as they should.
+func currentJoinSeq(prj *Project) uint64 {
+	if seq := getCount(projectJoinSeqKey(prj.ID)); seq != 0 {
+		return seq
+	}
+	return uint64(prj.MemberCount) + 1
+}
+
+// allocateJoinSeq consumes and returns the next join sequence number.
+func allocateJoinSeq(prj *Project) uint64 {
+	seq := currentJoinSeq(prj)
+	setCount(projectJoinSeqKey(prj.ID), seq+1)
+	return seq
 }
 
 // hasActivePayout checks payout locks to avoid releasing stake while funds are still promised.
@@ -470,10 +516,14 @@ func kickMember(prj *Project, addr sdk.Address) {
 		sdk.Abort(fmt.Sprintf("cannot kick %s: active payout pending", AddressToString(addr)))
 	}
 
-	// Refund stake
+	// Refund stake. Skipped for a zero balance — see LeaveProject. Here the stakes are
+	// higher still: a zero-value transfer aborts the ENTIRE ExecuteProposal, so a
+	// passed proposal carrying a kick_member outcome could never execute at any
+	// timestamp, permanently stranding any payout riding on that same proposal.
 	withdraw := member.Stake
-	mAmount := AmountToInt64(withdraw)
-	sdk.HiveTransfer(addr, mAmount, prj.FundsAsset)
+	if withdraw > 0 {
+		sdk.HiveTransfer(addr, AmountToInt64(withdraw), prj.FundsAsset)
+	}
 
 	// Cleanup
 	deleteAllStakeHistory(prj.ID, addr, member.StakeIncrement)

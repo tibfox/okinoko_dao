@@ -76,8 +76,8 @@ func CreateProposal(payload *string) *string {
 	}
 	// Cap duration so CreatedAt + duration*3600 cannot overflow int64 and push the
 	// deadline into the past (which would make the proposal tallyable immediately).
-	if duration > MaxDurationHours {
-		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+	if duration > MaxProposalDurationHours {
+		sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxProposalDurationHours))
 	}
 
 	now := nowUnix()
@@ -111,9 +111,12 @@ func CreateProposal(payload *string) *string {
 		Tx:                  txID,
 		MemberCountSnapshot: memberSnap,
 		StakeSnapshot:       stakeSnap,
-		IsPoll:              isPoll,
-		OptionCount:         uint32(len(input.OptionsList)),
-		ExecutableAt:        0,
+		// Captured together with the two denominators above so that vote eligibility
+		// and the tally denominators describe exactly the same set of members.
+		JoinSeqSnapshot: currentJoinSeq(prj),
+		IsPoll:          isPoll,
+		OptionCount:     uint32(len(input.OptionsList)),
+		ExecutableAt:    0,
 	}
 
 	if prj.Config.ProposalCost > 0 {
@@ -368,8 +371,8 @@ func ExecuteProposal(proposalID *string) *string {
 					if v < MinProposalDurationHours {
 						sdk.Abort(fmt.Sprintf("proposal duration must be at least %d hour(s)", MinProposalDurationHours))
 					}
-					if v > MaxDurationHours {
-						sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxDurationHours))
+					if v > MaxProposalDurationHours {
+						sdk.Abort(fmt.Sprintf("proposal duration must not exceed %d hours", MaxProposalDurationHours))
 					}
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "proposalDuration", fmt.Sprintf("%d", prj.Config.ProposalDurationHours), value)
 					prj.Config.ProposalDurationHours = v
@@ -553,6 +556,36 @@ func ExecuteProposal(proposalID *string) *string {
 				}
 			}
 		}
+		// CHECKS-EFFECTS-INTERACTIONS, part 2 — the PROJECT record.
+		//
+		// Everything above mutates the in-memory `prj` (payout/kick stake accounting,
+		// config and meta outcomes). Commit it here, BEFORE the ICC loop's external
+		// call, for the same reason the proposal state is committed before payouts.
+		//
+		// Writing these back AFTER the call was a live drain: because msg.sender
+		// propagates into nested frames (the deliberate delegation behaviour), a
+		// hostile ICC callee can re-enter the DAO as the executor and commit its own
+		// changes to the project record — a project_leave that refunds its stake, a
+		// project_funds that re-stakes it, a project_join, a project_pause. The
+		// trailing write then restored this stale snapshot over them, keeping the
+		// LEDGER movement while reverting the BOOKKEEPING. That desynced StakeTotal /
+		// MemberCount from reality, permanently inflating the quorum and threshold
+		// denominators snapshotted by future proposals, and in the worst case let the
+		// attacker hold voting stake the books had already refunded.
+		//
+		// The ICC loop below touches only prj.ID (treasury balances live under their
+		// own state keys, not in ProjectFinance), so it has no struct changes of its
+		// own to persist — nothing is lost by committing here.
+		if fundsTransferred {
+			saveProjectFinance(prj)
+		}
+		if configChanged {
+			saveProjectConfig(prj)
+		}
+		if stateChanged {
+			saveProjectMeta(prj)
+		}
+
 		if len(prpsl.Outcome.ICC) > 0 {
 			// Execute inter-contract calls
 			for _, icc := range prpsl.Outcome.ICC {
@@ -608,16 +641,9 @@ func ExecuteProposal(proposalID *string) *string {
 		}
 	}
 
-	// (state already committed above, before payouts/ICC — see the note there)
-	if fundsTransferred {
-		saveProjectFinance(prj)
-	}
-	if configChanged {
-		saveProjectConfig(prj)
-	}
-	if stateChanged {
-		saveProjectMeta(prj)
-	}
+	// (proposal state AND project record are both already committed above, before
+	// payouts and the ICC call — see the two checks-effects-interactions notes.
+	// Nothing may write a pre-ICC snapshot of shared state from here on.)
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)
 	if metaChanged {
 		emitProposalResultEvent(prj.ID, prpsl.ID, "meta changed")

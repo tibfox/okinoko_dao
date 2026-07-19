@@ -132,6 +132,18 @@ func validateAddress(addr sdk.Address) {
 			sdk.Abort("invalid character in address")
 		}
 	}
+	// Require a known address namespace with a non-empty body. Without this, bare
+	// strings like "notanaddress", "0", ":::" or "hive:" were accepted everywhere an
+	// address is taken (payouts, update_owner, whitelist entries) and paid out: the
+	// ledger happily credits a literal account of that name and the funds are gone.
+	// A typo in a payout beneficiary should fail loudly at parse time, not silently
+	// transfer the treasury to an unrecoverable destination.
+	for _, prefix := range validAddressPrefixes {
+		if len(s) > len(prefix) && strings.HasPrefix(s, prefix) {
+			return
+		}
+	}
+	sdk.Abort("address must be hive:<name> or did:<id>")
 }
 
 // -----------------------------------------------------------------------------

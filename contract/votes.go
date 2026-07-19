@@ -105,8 +105,24 @@ func VoteProposal(payload *string) *string {
 
 	prevVote := loadVoteRecord(input.ProposalID, voter)
 
-	// check if member joined after proposal
-	if member.JoinedAt > prpsl.CreatedAt {
+	// Reject members who joined after the proposal was created.
+	//
+	// This MUST NOT be a timestamp comparison. nowUnix() returns the BLOCK
+	// timestamp, which is identical for every transaction in a block, so
+	// JoinedAt == CreatedAt for members who joined earlier in the same block (they
+	// ARE inside MemberCountSnapshot/StakeSnapshot) and equally for those who joined
+	// later in the same block (they are NOT). A `>` comparison admits the latter,
+	// letting an attacker bundle create + sybil joins + votes into one block and
+	// vote against a stale denominator — total weight over 100%, honest members
+	// never needed. A `>=` comparison would instead disenfranchise the former.
+	// Timestamps simply cannot order events within a block; the join sequence can.
+	if prpsl.JoinSeqSnapshot > 0 {
+		if member.JoinSeq >= prpsl.JoinSeqSnapshot {
+			sdk.Abort("proposal was created before joining the project")
+		}
+	} else if member.JoinedAt > prpsl.CreatedAt {
+		// Pre-upgrade proposal (no snapshot recorded): fall back to the legacy check
+		// so proposals already open at upgrade time stay votable.
 		sdk.Abort("proposal was created before joining the project")
 	}
 

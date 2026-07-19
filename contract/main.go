@@ -55,4 +55,3 @@ func ContractInit(payload *string) *string {
 	}
 	return strptr("initialized with owner-only project creation")
 }
-

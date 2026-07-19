@@ -12,8 +12,8 @@ import (
 func sanitizeEventValue(val string) string {
 	val = strings.ReplaceAll(val, "|", " ")
 	val = strings.ReplaceAll(val, "\n", " ")
-	val = strings.ReplaceAll(val, ";", ",")  // Semicolon used in option separator
-	val = strings.ReplaceAll(val, ":", "-")  // Colon used in option text:url separator
+	val = strings.ReplaceAll(val, ";", ",") // Semicolon used in option separator
+	val = strings.ReplaceAll(val, ":", "-") // Colon used in option text:url separator
 	return strings.TrimSpace(val)
 }
 
