@@ -306,3 +306,44 @@ func TestBreak_ListFieldsAreBounded(t *testing.T) {
 	_, ok = createProposalRaw(ct, big, "hive:someone", "meta")
 	assert.False(t, ok, "an oversize outcome-meta blob was accepted")
 }
+
+// R13-11: vote-and-run. A member who votes must not be able to withdraw their
+// stake before the proposal they influenced is decided.
+//
+// The leave cooldown alone could not enforce this: it is a fixed delay, so whenever
+// LeaveCooldownHours < the proposal's voting period (the 24h/24h default sits
+// exactly on the boundary) a voter could cast a full-weight ballot and fully exit
+// before the tally. Nothing decrements their weight on leave and StakeSnapshot is
+// frozen at creation, so the ballot still counted at 100% strength from an account
+// with zero remaining exposure.
+func TestBreak_VoterCannotWithdrawBeforeTally(t *testing.T) {
+	ct := SetupContractTest()
+	// cooldown 1h, proposal duration 48h -> cooldown expires long before the deadline
+	f := defaultProjectFields()
+	f[5] = "48" // proposal duration
+	f[7] = "1"  // leave cooldown
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(strings.Join(f, "|")),
+		transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	pid := parseCreatedID(t, res.Ret, "project")
+	joinProjectMember(t, ct, pid, "hive:someoneelse")
+
+	fields := []string{strconv.FormatUint(pid, 10), "long", "d", "48", "", "0", "", "", "", "", ""}
+	propID, ok := createProposalRaw(ct, fields, "hive:someone", "c")
+	assert.True(t, ok)
+	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v").Success)
+
+	// Arming the exit is still allowed...
+	arm := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", defaultTimestamp, "l1")
+	assert.True(t, arm.Success)
+	// ...but the withdrawal itself must wait for the proposal to be decided, even
+	// though the 1h cooldown has long since elapsed at lateTS (+2 days).
+	// (lateTS is 2025-09-05; the 48h deadline from 2025-09-03 is 2025-09-05T00:00 —
+	// use a timestamp strictly inside the voting window.)
+	early := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", "2025-09-04T00:00:00", "l2")
+	assert.False(t, early.Success, "voter withdrew stake while the proposal they voted on was still running")
+	assert.Contains(t, early.Ret, "stake locked until", "blocked for the wrong reason: %s", early.Ret)
+
+	// Once the voting period is over the stake is released.
+	done := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", "2025-09-06T00:00:00", "l3")
+	assert.True(t, done.Success, "stake still locked after the proposal deadline: %s", done.Ret)
+}

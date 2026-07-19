@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	contract_session "vsc-node/modules/contract/session"
 	"vsc-node/lib/test_utils"
+	contract_session "vsc-node/modules/contract/session"
 	"vsc-node/modules/db/vsc/contracts"
 	ledgerDb "vsc-node/modules/db/vsc/ledger"
 	stateEngine "vsc-node/modules/state-processing"

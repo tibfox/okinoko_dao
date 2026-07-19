@@ -107,7 +107,7 @@ func TestBreak_NoOptionWinningStillPaysOut(t *testing.T) {
 // A single member selecting multiple options should not satisfy a 2-voter quorum.
 func TestBreak_QuorumInflationViaMultiSelect(t *testing.T) {
 	ct := SetupContractTest()
-	pid := createStakeProject(t, ct)                 // creator hive:someone stake 1
+	pid := createStakeProject(t, ct)                       // creator hive:someone stake 1
 	joinWithStake(t, ct, pid, "hive:member2", "100.000")   // whale
 	joinWithStake(t, ct, pid, "hive:someoneelse", "1.000") // 3 members total
 	addTreasuryFunds(t, ct, pid, "2.000")
@@ -495,14 +495,38 @@ func TestBound_NonMemberCannotCreateProposal(t *testing.T) {
 
 // BOUND: a member with active payout lock cannot leave (griefing-adjacent but
 // documents the intended lock).
-func TestBound_PayoutTargetCannotLeaveDuringVote(t *testing.T) {
+// BOUND: payout locks bind once the DAO has APPROVED the payout, not while it is
+// merely proposed.
+//
+// This previously asserted the opposite (locked at creation). That rule let any
+// member freeze any other member's stake for the whole voting period by naming
+// them as a beneficiary without consent, with release only by the creator or
+// owner — a unilateral grief. Locking at tally-on-pass removes it and is strictly
+// stronger, since the approved-but-unexecuted window used to be unlocked entirely.
+func TestBound_PayoutTargetLockedOnlyAfterApproval(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	// proposal names someoneelse as payout target; lock is set at creation.
-	createPollProposal(t, ct, pid, "5", "hive:someoneelse:0.500:hive", "")
-	res := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", defaultTimestamp, "l")
-	assert.False(t, res.Success, "payout-target left while a payout was pending")
+	joinProjectMember(t, ct, pid, "hive:member2")
+	addTreasuryFunds(t, ct, pid, "5.000")
+
+	// A merely-proposed payout must NOT restrict the named member (they did not vote,
+	// so no vote-lock applies either).
+	propID := createPollProposal(t, ct, pid, "1", "hive:someoneelse:0.500:hive", "")
+	arm := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", defaultTimestamp, "l")
+	assert.True(t, arm.Success, "a merely-proposed payout froze the beneficiary: %s", arm.Ret)
+
+	// Once the DAO approves it, the beneficiary IS locked until it executes.
+	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v1").Success)
+	assert.True(t, voteRaw(ct, propID, "hive:member2", "1", "v2").Success)
+	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
+	blocked := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", lateTS, "l2")
+	assert.False(t, blocked.Success, "beneficiary left while an APPROVED payout was pending")
+
+	// ...and released once the funds actually move.
+	assert.True(t, rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e").Success)
+	after := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", lateTS, "l3")
+	assert.True(t, after.Success, "payout lock not released after execution: %s", after.Ret)
 }
 
 // BOUND: owner cannot leave without transferring ownership first.

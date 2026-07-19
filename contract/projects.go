@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"okinoko_dao/sdk"
 )
@@ -313,6 +314,14 @@ func LeaveProject(projectID *string) *string {
 	}
 	if now-member.ExitRequested < int64(prj.Config.LeaveCooldownHours*3600) {
 		sdk.Abort("cooldown not passed")
+	}
+	// Stake stays put until every proposal this member voted on has been decided.
+	// The cooldown is a fixed delay and cannot cover a voting period longer than
+	// itself; this covers the actual decision the member influenced. Arming the
+	// exit is still allowed — only the final withdrawal waits.
+	if now < member.VoteLockUntil {
+		sdk.Abort(fmt.Sprintf("stake locked until %s: you voted on a proposal that is still running",
+			time.Unix(member.VoteLockUntil, 0).UTC().Format(time.RFC3339)))
 	}
 
 	// Refund stake. The transfer is SKIPPED for a zero balance: the host rejects a

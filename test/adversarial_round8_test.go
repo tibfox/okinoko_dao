@@ -148,8 +148,8 @@ func TestBreak_StakeWithNonFundsAssetGoesToTreasury_DesignNote(t *testing.T) {
 	assert.True(t, res.Success, "HBD stake-deposit to a HIVE project failed: %s", res.Ret)
 	// The HBD landed in treasury; a proposal can pay it back out.
 	propID := createPollProposal(t, ct, pid, "1", "hive:someoneelse:2.000:hbd", "")
-	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v0").Success)     // owner votes (quorum needs 2)
-	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v").Success)  // 5 stake, passes threshold
+	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v0").Success)    // owner votes (quorum needs 2)
+	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v").Success) // 5 stake, passes threshold
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	d0 := hbdBal(ct, "hive:someoneelse")
 	assert.True(t, rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e").Success)

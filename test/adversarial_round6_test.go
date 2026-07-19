@@ -14,7 +14,9 @@ import (
 	ledgerDb "vsc-node/modules/db/vsc/ledger"
 )
 
-func hbdBal(ct *test_utils.ContractTest, acct string) int64 { return ct.GetBalance(acct, ledgerDb.AssetHbd) }
+func hbdBal(ct *test_utils.ContractTest, acct string) int64 {
+	return ct.GetBalance(acct, ledgerDb.AssetHbd)
+}
 
 // addTreasuryAsset donates a specific asset to a project's treasury (toStake=false).
 func addTreasuryAsset(t *testing.T, ct *test_utils.ContractTest, pid uint64, amount, token, user string) {
@@ -26,7 +28,7 @@ func TestBreak_MultiAssetPayoutBothTransfer(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct) // FundsAsset = HIVE
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	addTreasuryFunds(t, ct, pid, "2.000")          // HIVE
+	addTreasuryFunds(t, ct, pid, "2.000")                        // HIVE
 	addTreasuryAsset(t, ct, pid, "2.000", "hbd", "hive:someone") // HBD
 	propID := createPollProposal(t, ct, pid, "1", "hive:someoneelse:1.000:hive;hive:member2:1.000:hbd", "")
 	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v1").Success)

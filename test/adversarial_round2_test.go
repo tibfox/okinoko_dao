@@ -47,8 +47,8 @@ func TestBreak_EmptyBallotDoesNotInflateQuorum(t *testing.T) {
 	propID := createPollProposal(t, ct, pid, "1", "hive:someoneelse:0.500:hive", "")
 
 	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v").Success) // 1 real YES (25%)
-	voteRaw(ct, propID, "hive:member2", "", "e1")                          // empty
-	voteRaw(ct, propID, "hive:outsider", "", "e2")                         // empty
+	voteRaw(ct, propID, "hive:member2", "", "e1")                         // empty
+	voteRaw(ct, propID, "hive:outsider", "", "e2")                        // empty
 
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	before := hiveBal(ct, "hive:someoneelse")
@@ -131,19 +131,22 @@ func TestBreak_CreatorCancelKeepsCostInTreasury(t *testing.T) {
 
 // R2-6: cancelling a payout proposal releases the payout lock so the target can
 // leave again.
-func TestBreak_CancelReleasesPayoutLock(t *testing.T) {
+func TestBreak_ActiveProposalDoesNotLockBeneficiary(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
 	propID := createPollProposal(t, ct, pid, "5", "hive:someoneelse:0.500:hive", "")
-	// locked -> cannot leave
-	blocked := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", defaultTimestamp, "l0")
-	assert.False(t, blocked.Success)
+	// An ACTIVE proposal holds no payout lock — locks are taken at tally-on-pass —
+	// so the named member can arm their exit while it is still being voted on.
+	arm := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", defaultTimestamp, "l0")
+	assert.True(t, arm.Success, "an unapproved payout proposal froze the beneficiary: %s", arm.Ret)
+	assert.Equal(t, "exit requested", arm.Ret)
 	// owner cancels
 	assert.True(t, rawCallAt(ct, "proposal_cancel", PayloadUint64(propID), nil, "hive:someone", defaultTimestamp, "x").Success)
-	// now leave request should be accepted (first of the two-step leave)
-	res := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", defaultTimestamp, "l1")
-	assert.True(t, res.Success, "payout lock not released after cancel")
+	// and the exit completes once the leave cooldown has elapsed (lateTS)
+	res := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someoneelse", lateTS, "l1")
+	assert.True(t, res.Success, "leave blocked after cancel: %s", res.Ret)
+	assert.Equal(t, "exit finished", res.Ret)
 }
 
 // R2-7: staking via AddFunds must be rejected in a democratic project.

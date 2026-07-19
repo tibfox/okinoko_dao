@@ -28,8 +28,10 @@ func passAndExecuteAt(t *testing.T, ct *test_utils.ContractTest, propID uint64, 
 
 // ============================================================================
 // Scenario A — Community Grants DAO (democratic): full lifecycle
-//   create → 4 members → grant payout → lower quorum → kick a member →
-//   transfer ownership → verify at each step.
+//
+//	create → 4 members → grant payout → lower quorum → kick a member →
+//	transfer ownership → verify at each step.
+//
 // ============================================================================
 func TestE2E_DemocraticGrantsDAOLifecycle(t *testing.T) {
 	ct := SetupContractTest()
@@ -67,12 +69,14 @@ func TestE2E_DemocraticGrantsDAOLifecycle(t *testing.T) {
 
 // ============================================================================
 // Scenario B — Stake-weighted Treasury DAO: whale dynamics + historical weight
-//   whale alone can pass; a minority cannot; a departed whale is refunded.
+//
+//	whale alone can pass; a minority cannot; a departed whale is refunded.
+//
 // ============================================================================
 func TestE2E_StakeWeightedTreasuryDAO(t *testing.T) {
 	ct := SetupContractTest()
-	pid := makeProject(t, ct, "1", "50.000", "1") // stake, threshold 50%, low quorum
-	joinWithStake(t, ct, pid, "hive:member2", "100.000")   // whale
+	pid := makeProject(t, ct, "1", "50.000", "1")           // stake, threshold 50%, low quorum
+	joinWithStake(t, ct, pid, "hive:member2", "100.000")    // whale
 	joinWithStake(t, ct, pid, "hive:someoneelse", "40.000") // minority
 	addTreasuryFunds(t, ct, pid, "20.000")
 	// total stake = 1 (someone) + 100 + 40 = 141
@@ -121,14 +125,16 @@ func TestE2E_WhitelistGatedDAO(t *testing.T) {
 
 // ============================================================================
 // Scenario D — Multi-asset + pause lifecycle
-//   fund HIVE+HBD → pause → payout blocked → unpause via toggle_pause proposal →
-//   multi-asset payout executes both legs.
+//
+//	fund HIVE+HBD → pause → payout blocked → unpause via toggle_pause proposal →
+//	multi-asset payout executes both legs.
+//
 // ============================================================================
 func TestE2E_MultiAssetAndPauseLifecycle(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	addTreasuryFunds(t, ct, pid, "5.000")                                                                                       // HIVE
+	addTreasuryFunds(t, ct, pid, "5.000")                                                                                                                    // HIVE
 	CallContract(t, ct, "project_funds", PayloadString(fmt.Sprintf("%d|false", pid)), transferIntentWithToken("5.000", "hbd"), "hive:someone", true, bigGas) // HBD
 
 	// pause the project
@@ -151,7 +157,9 @@ func TestE2E_MultiAssetAndPauseLifecycle(t *testing.T) {
 
 // ============================================================================
 // Scenario E — Execution delay + poll semantics
-//   a passed action respects the execution delay; a poll never executes.
+//
+//	a passed action respects the execution delay; a poll never executes.
+//
 // ============================================================================
 func TestE2E_ExecutionDelayAndPoll(t *testing.T) {
 	ct := SetupContractTest()

@@ -237,15 +237,16 @@ func TestLeaveProjectOwnerMustTransferFirst(t *testing.T) {
 }
 
 // TestProjectLeaveBlockedDuringPayoutProposal checks the project leave blocked during payout proposal flow so we dont break it again.
-func TestProjectLeaveBlockedDuringPayoutProposal(t *testing.T) {
+// A payout that is only PROPOSED must not block the beneficiary from leaving.
+// Locks are taken at tally-on-pass — see TestBound_PayoutTargetLockedOnlyAfterApproval
+// for the full lifecycle, and the note in CreateProposal for why locking at
+// creation was a griefing vector.
+func TestProjectLeaveAllowedDuringUnapprovedPayoutProposal(t *testing.T) {
 	ct := SetupContractTest()
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	createPollProposal(t, ct, projectID, "24", "hive:someoneelse:1:hive", "")
-	res, _, _ := CallContractAt(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", false, uint(1_000_000_000), "2025-09-05T00:00:00")
-	if !strings.Contains(res.Ret, "active proposal requesting funds") {
-		t.Fatalf("expected payout lock block, got %q", res.Ret)
-	}
+	CallContractAt(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
 // TestMemberCanLeaveAfterVoting ensures members can leave after voting on proposals.
@@ -480,8 +481,12 @@ func TestKickMemberWithActivePayout(t *testing.T) {
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	joinProjectMember(t, ct, projectID, "hive:member2")
 
-	// Create a payout proposal targeting someoneelse (creates payout lock)
-	createPollProposal(t, ct, projectID, "24", "hive:someoneelse:1:hive", "")
+	addTreasuryFunds(t, ct, projectID, "5.000")
+
+	// APPROVE a payout to someoneelse: tally-on-pass takes the lock.
+	payoutID := createPollProposal(t, ct, projectID, "1", "hive:someoneelse:1.000:hive", "")
+	voteForProposal(t, ct, payoutID, "hive:someone", "hive:member2")
+	CallContractAt(t, ct, "proposal_tally", PayloadUint64(payoutID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 
 	// Create proposal to kick someoneelse
 	kickProposalID := createPollProposal(t, ct, projectID, "1", "", "kick_member=hive:someoneelse")
@@ -492,7 +497,7 @@ func TestKickMemberWithActivePayout(t *testing.T) {
 	// Tally
 	CallContractAt(t, ct, "proposal_tally", PayloadUint64(kickProposalID), nil, "hive:someone", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 
-	// Execute should fail due to active payout
+	// Execute should fail: an APPROVED payout to that member is still pending.
 	res, _, _ := CallContractAt(t, ct, "proposal_execute", PayloadUint64(kickProposalID), nil, "hive:someone", false, uint(1_000_000_000), "2025-09-05T00:00:00")
 	if !strings.Contains(res.Ret, "active payout pending") {
 		t.Fatalf("expected payout lock rejection, got %q", res.Ret)

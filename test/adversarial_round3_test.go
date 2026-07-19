@@ -207,13 +207,13 @@ func TestBreak_MalformedPayloadsAbortCleanly(t *testing.T) {
 	}{
 		{"project_join", "not-a-number"},
 		{"project_join", ""},
-		{"proposals_vote", fmt.Sprintf("%d|", pid)},          // no choices
-		{"proposals_vote", "abc|1"},                          // bad proposal id
-		{"proposal_create", strconv.FormatUint(pid, 10)},     // missing required fields
-		{"proposal_tally", "99999"},                          // nonexistent proposal
-		{"proposal_execute", "not-a-number"},                 // bad id
-		{"project_transfer", strconv.FormatUint(pid, 10)},    // missing new owner
-		{"project_funds", strconv.FormatUint(pid, 10)},       // missing toStake flag
+		{"proposals_vote", fmt.Sprintf("%d|", pid)},            // no choices
+		{"proposals_vote", "abc|1"},                            // bad proposal id
+		{"proposal_create", strconv.FormatUint(pid, 10)},       // missing required fields
+		{"proposal_tally", "99999"},                            // nonexistent proposal
+		{"proposal_execute", "not-a-number"},                   // bad id
+		{"project_transfer", strconv.FormatUint(pid, 10)},      // missing new owner
+		{"project_funds", strconv.FormatUint(pid, 10)},         // missing toStake flag
 		{"project_whitelist_add", strconv.FormatUint(pid, 10)}, // no addresses
 	}
 	for i, c := range cases {
