@@ -21,7 +21,7 @@ func CreateProject(payload *string) *string {
 
 	// Check project creation permission
 	cfg := loadContractConfig()
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	if !cfg.ProjectCreationPublic && !isContractOwner(caller) {
 		sdk.Abort("only contract owner can create projects")
 	}
@@ -140,7 +140,7 @@ func JoinProject(projectID *string) *string {
 	if prj.Paused {
 		sdk.Abort("project paused")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 
 	if _, exists := loadMember(prj.ID, callerAddr); exists {
@@ -229,7 +229,7 @@ func WhitelistMembers(payload *string) *string {
 	// TestOwnerWhitelistAddNoLimit / TestOwnerWhitelistAdd100Addresses). Only the
 	// proposal meta path (whitelist_add) enforces MaxWhitelistAddresses.
 	prj := loadProject(projectID)
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	if !hasOwner(prj) {
 		sdk.Abort("project is autonomous - no owner privileges")
 	}
@@ -251,7 +251,7 @@ func RemoveWhitelistedMembers(payload *string) *string {
 	requireInitialized()
 	projectID, addresses := decodeWhitelistPayload(payload)
 	prj := loadProject(projectID)
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	if !hasOwner(prj) {
 		sdk.Abort("project is autonomous - no owner privileges")
 	}
@@ -276,7 +276,7 @@ func LeaveProject(projectID *string) *string {
 	if err != nil {
 		sdk.Abort("invalid project ID")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	prj := loadProject(id)
 	if prj.Paused {
@@ -375,7 +375,7 @@ func AddFunds(payload *string) *string {
 	if prj.Paused && input.ToStake {
 		sdk.Abort("cannot add stake while project is paused")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 
 	// Get all valid transfer intents
@@ -516,7 +516,7 @@ func TransferProjectOwnership(payload *string) *string {
 	if newOwnerStr == "" {
 		sdk.Abort("new owner address required")
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	newOwnerAddr := AddressFromString(newOwnerStr)
 	validateAddress(newOwnerAddr)
@@ -560,7 +560,7 @@ func EmergencyPauseImmediate(payload *string) *string {
 	if len(parts) > 1 {
 		pause = parseBoolField(parts[1])
 	}
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	prj := loadProject(id)
 	if !hasOwner(prj) {

@@ -99,7 +99,7 @@ func VoteProposal(payload *string) *string {
 		sdk.Abort("proposal not active")
 	}
 	prj := loadProject(prpsl.ProjectID)
-	voter := getSenderAddress()
+	voter := getActorAddress()
 	voterAddr := voter
 	member := getMember(prj.ID, voterAddr)
 

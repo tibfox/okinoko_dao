@@ -28,7 +28,7 @@ func CreateProposal(payload *string) *string {
 		}
 	}
 
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerStr := caller.String()
 	callerAddr := caller
 	prj := loadProject(input.ProjectID)
@@ -274,7 +274,7 @@ func ExecuteProposal(proposalID *string) *string {
 
 	// If proposal has ICC calls, only creator can execute
 	if prpsl.Outcome != nil && len(prpsl.Outcome.ICC) > 0 {
-		caller := getSenderAddress()
+		caller := getActorAddress()
 		if caller != prpsl.Creator {
 			sdk.Abort("only proposal creator can execute proposals with inter-contract calls")
 		}
@@ -671,7 +671,7 @@ func CancelProposal(payload *string) *string {
 	}
 	prj := loadProject(prpsl.ProjectID)
 
-	caller := getSenderAddress()
+	caller := getActorAddress()
 	callerAddr := caller
 	// For autonomous projects, only creator can cancel (no owner exists)
 	isOwner := hasOwner(prj) && callerAddr == prj.Owner

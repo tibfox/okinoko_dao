@@ -108,25 +108,26 @@ func getAllTransferAllows() []TransferAllow {
 	return transfers
 }
 
-// getSenderAddress returns the authenticated actor for the current call.
+// getActorAddress returns the authenticated identity for the current call: the
+// IMMEDIATE caller (msg.caller), not the original transaction signer (msg.sender).
 //
-// Authorization is intentionally based on msg.sender (the original transaction
-// signer), NOT msg.caller. But msg.sender is propagated verbatim into nested
-// contract call frames by the host, so on its own it is a confused-deputy hole:
-// if a member ever calls ANY third-party contract, that contract can call back
-// into this one within the same transaction and act with the member's full
-// authority (transfer their project away, cast their stake, cancel proposals...).
+// This is deliberate and security-critical. The host propagates msg.sender
+// verbatim into nested contract call frames, while msg.caller becomes
+// "contract:<id>". Authorizing on msg.sender would therefore be a confused-deputy
+// hole: any third-party contract a member called could call back into this one in
+// the same transaction and act with that member's full authority — transferring
+// their project away, casting their stake, cancelling their proposals.
 //
-// We close that by requiring the call to be direct — msg.caller must be the same
-// account as msg.sender. A contract-domain caller ("contract:...") never matches
-// a user address, so any intermediary is rejected. This keeps sender semantics
-// while making a nested frame unable to impersonate the signer.
-func getSenderAddress() sdk.Address {
+// Using msg.caller keeps contract-to-contract calls fully supported: a calling
+// contract simply acts as ITSELF ("contract:<id>"), so it can join, hold stake,
+// own a project and vote in its own right — but it can never impersonate the user
+// who invoked it. For a direct user transaction the host sets caller == sender,
+// so ordinary accounts are unaffected. (Same convention as magi_token-contract.)
+func getActorAddress() sdk.Address {
 	env := currentEnv()
-	sender := env.Sender.Address
-	// An empty caller means the host did not supply msg.caller; treat as direct.
-	if env.Caller != "" && env.Caller != sender {
-		sdk.Abort("contract calls must be made directly by the signing account")
+	if env.Caller != "" {
+		return env.Caller
 	}
-	return sender
+	// Host did not supply msg.caller — fall back to the signer.
+	return env.Sender.Address
 }

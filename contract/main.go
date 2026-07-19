@@ -39,7 +39,7 @@ func ContractInit(payload *string) *string {
 
 	// Store contract config with caller as owner. The owner is encoded into a
 	// pipe-delimited config record, so guard against any delimiter bytes.
-	owner := getSenderAddress()
+	owner := getActorAddress()
 	validateAddress(owner)
 	cfg := ContractConfig{
 		Owner:                 owner,

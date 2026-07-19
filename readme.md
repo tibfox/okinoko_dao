@@ -224,6 +224,12 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
 - `toggle_pause=1`
 - `kick_member=<address1,address2,...>` - Remove members and refund their stake (cannot kick owner or members with active payouts). Existing votes on active proposals remain valid.
 
+**Caller identity:** authorization uses `msg.caller` (the immediate caller), not the
+original transaction signer. A user calling the DAO directly acts as themselves. Another
+**contract** may also call the DAO — it acts as *itself* (`contract:<id>`) and can join,
+stake, own a project and vote in its own right. A contract can never act on behalf of the
+user who invoked it, which prevents a hostile intermediary from spending your membership.
+
 **Additional enforced limits (not otherwise listed above):**
 
 - A proposal's `duration` may not be *shorter* than the project's `proposalDuration`, and may not exceed 87600 hours (10 years).

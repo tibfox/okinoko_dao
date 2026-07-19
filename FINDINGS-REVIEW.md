@@ -268,8 +268,14 @@ Authorizing on `msg.sender` alone therefore meant **any** contract a member call
 could call back into the DAO within the same tx and act with that member's full
 authority — steal project ownership, cast their stake, cancel proposals, force a
 leave. It also defeated the ICC creator-only guard, enabling R1.
-**Fixed:** `getSenderAddress()` now requires `msg.caller == msg.sender`, rejecting any
-intermediary contract while keeping sender-based identity semantics.
+**Fixed:** identity is now taken from **`msg.caller`** (renamed `getActorAddress()`),
+matching the convention magi_token-contract adopted. Contract-to-contract calls remain
+fully supported — a calling contract simply acts as ITSELF (`contract:<id>`), so it can
+join, hold stake, own a project and vote in its own right, but can never impersonate the
+user who invoked it. For a direct user transaction the host sets `caller == sender`
+(`transactions.go:148-149`), so ordinary accounts are unaffected.
+(An initial fix required `caller == sender`, which would have blocked all contract
+callers; that was wrong for this contract's intended use and was replaced.)
 
 ### R3 — HIGH: ICC transfer intents used the wrong arg names (found by 3 reviewers)
 The host reads `transfer.allow` as `Args["token"]` + `Args["limit"]` and *silently
