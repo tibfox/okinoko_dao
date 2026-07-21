@@ -126,6 +126,9 @@ type Member struct {
 	// timestamp, so JoinedAt cannot distinguish "joined before this proposal" from
 	// "joined after it in the same block". The founding member is 0.
 	JoinSeq uint64
+	// VoteLockUntil is the deadline of the latest still-undecided proposal this
+	// member has voted on. They cannot complete a leave before it. See VoteProposal.
+	VoteLockUntil int64
 }
 
 type Project struct {

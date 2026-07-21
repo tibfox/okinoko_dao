@@ -140,10 +140,10 @@ func TestTieBreakingHigherIndexWins(t *testing.T) {
 
 	// Create project with low threshold so ties can pass
 	fields := defaultProjectFields()
-	fields[3] = "25"  // threshold: 25% (so 50% can pass)
-	fields[4] = "25"  // quorum: 25%
-	fields[5] = "1"   // proposalDurationHours
-	fields[6] = "0"   // executionDelayHours
+	fields[3] = "25" // threshold: 25% (so 50% can pass)
+	fields[4] = "25" // quorum: 25%
+	fields[5] = "1"  // proposalDurationHours
+	fields[6] = "0"  // executionDelayHours
 	payload := strings.Join(fields, "|")
 	res, _, _ := CallContract(t, ct, "project_create", PayloadString(payload), transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
 	projectID := parseCreatedID(t, res.Ret, "project")

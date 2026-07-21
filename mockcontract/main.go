@@ -109,3 +109,22 @@ func Noop(payload *string) *string {
 	ok := "noop"
 	return &ok
 }
+
+// NftOwned / NftNone stand in for a membership-NFT contract. checkNFTMembership
+// treats a result of "[]" or "" as "caller does not own the NFT" and anything else
+// as ownership, so these two exports let the DAO's membership gate be tested for
+// real. Before they existed the gate tests pointed at a contract that was never
+// registered, so the join failed with a host-level "contract not found" and the
+// gate logic itself was never reached.
+//
+//go:wasmexport nft_owned
+func NftOwned(payload *string) *string {
+	editions := "[1]"
+	return &editions
+}
+
+//go:wasmexport nft_none
+func NftNone(payload *string) *string {
+	none := "[]"
+	return &none
+}

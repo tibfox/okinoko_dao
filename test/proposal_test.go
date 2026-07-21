@@ -451,10 +451,9 @@ func TestPayoutLockReleasedAfterCancel(t *testing.T) {
 	projectID := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, projectID, "hive:someoneelse")
 	createPollProposal(t, ct, projectID, "24", "hive:someoneelse:1:hive", "")
-	res, _, _ := CallContractAt(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", false, uint(1_000_000_000), "2025-09-05T00:00:00")
-	if !strings.Contains(res.Ret, "active proposal requesting funds") {
-		t.Fatalf("expected lock, got %q", res.Ret)
-	}
+	// Locks are taken at tally-on-pass, so an active proposal does not hold one and
+	// cancelling it changes nothing for the named member.
+	CallContractAt(t, ct, "project_leave", PayloadString(strconv.FormatUint(projectID, 10)), nil, "hive:someoneelse", true, uint(1_000_000_000), "2025-09-05T00:00:00")
 }
 
 // =============================================================================

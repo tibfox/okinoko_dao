@@ -28,8 +28,10 @@ func passAndExecuteAt(t *testing.T, ct *test_utils.ContractTest, propID uint64, 
 
 // ============================================================================
 // Scenario A — Community Grants DAO (democratic): full lifecycle
-//   create → 4 members → grant payout → lower quorum → kick a member →
-//   transfer ownership → verify at each step.
+//
+//	create → 4 members → grant payout → lower quorum → kick a member →
+//	transfer ownership → verify at each step.
+//
 // ============================================================================
 func TestE2E_DemocraticGrantsDAOLifecycle(t *testing.T) {
 	ct := SetupContractTest()
@@ -67,12 +69,14 @@ func TestE2E_DemocraticGrantsDAOLifecycle(t *testing.T) {
 
 // ============================================================================
 // Scenario B — Stake-weighted Treasury DAO: whale dynamics + historical weight
-//   whale alone can pass; a minority cannot; a departed whale is refunded.
+//
+//	whale alone can pass; a minority cannot; a departed whale is refunded.
+//
 // ============================================================================
 func TestE2E_StakeWeightedTreasuryDAO(t *testing.T) {
 	ct := SetupContractTest()
-	pid := makeProject(t, ct, "1", "50.000", "1") // stake, threshold 50%, low quorum
-	joinWithStake(t, ct, pid, "hive:member2", "100.000")   // whale
+	pid := makeProject(t, ct, "1", "50.000", "1")           // stake, threshold 50%, low quorum
+	joinWithStake(t, ct, pid, "hive:member2", "100.000")    // whale
 	joinWithStake(t, ct, pid, "hive:someoneelse", "40.000") // minority
 	addTreasuryFunds(t, ct, pid, "20.000")
 	// total stake = 1 (someone) + 100 + 40 = 141
@@ -87,7 +91,7 @@ func TestE2E_StakeWeightedTreasuryDAO(t *testing.T) {
 	o1 := hiveBal(ct, "hive:outsider")
 	p2 := createPollProposal(t, ct, pid, "1", "hive:outsider:5.000:hive", "")
 	res := passAndExecuteAt(t, ct, p2, lateTS, "hive:someoneelse")
-	assert.False(t, res.Success, "a 28% minority passed a >50% threshold")
+	assertAborts(t, res, "proposal is failed", "a 28%% minority passed a >50%% threshold")
 	assert.Equal(t, o1, hiveBal(ct, "hive:outsider"), "minority vote paid out")
 
 	// --- P3: the whale leaves and is refunded its full 100.000 stake ---
@@ -121,14 +125,16 @@ func TestE2E_WhitelistGatedDAO(t *testing.T) {
 
 // ============================================================================
 // Scenario D — Multi-asset + pause lifecycle
-//   fund HIVE+HBD → pause → payout blocked → unpause via toggle_pause proposal →
-//   multi-asset payout executes both legs.
+//
+//	fund HIVE+HBD → pause → payout blocked → unpause via toggle_pause proposal →
+//	multi-asset payout executes both legs.
+//
 // ============================================================================
 func TestE2E_MultiAssetAndPauseLifecycle(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct)
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	addTreasuryFunds(t, ct, pid, "5.000")                                                                                       // HIVE
+	addTreasuryFunds(t, ct, pid, "5.000")                                                                                                                    // HIVE
 	CallContract(t, ct, "project_funds", PayloadString(fmt.Sprintf("%d|false", pid)), transferIntentWithToken("5.000", "hbd"), "hive:someone", true, bigGas) // HBD
 
 	// pause the project
@@ -151,7 +157,9 @@ func TestE2E_MultiAssetAndPauseLifecycle(t *testing.T) {
 
 // ============================================================================
 // Scenario E — Execution delay + poll semantics
-//   a passed action respects the execution delay; a poll never executes.
+//
+//	a passed action respects the execution delay; a poll never executes.
+//
 // ============================================================================
 func TestE2E_ExecutionDelayAndPoll(t *testing.T) {
 	ct := SetupContractTest()
@@ -170,7 +178,7 @@ func TestE2E_ExecutionDelayAndPoll(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(p), nil, "hive:someone", "2025-09-03T02:00:00", "t")
 	// execute BEFORE the 24h delay -> rejected
 	early := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", p)), nil, "hive:someone", "2025-09-03T05:00:00", "early")
-	assert.False(t, early.Success, "proposal executed before its execution delay elapsed")
+	assertAborts(t, early, "execution delay until 2025-09-04T01:00:00Z", "proposal executed before its execution delay elapsed")
 	// execute AFTER the delay -> succeeds
 	before := hiveBal(ct, "hive:someoneelse")
 	late := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", p)), nil, "hive:someone", "2025-09-05T00:00:00", "late")
@@ -185,7 +193,7 @@ func TestE2E_ExecutionDelayAndPoll(t *testing.T) {
 	assert.True(t, voteRaw(ct, pollID, "hive:someoneelse", "0", "pv2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(pollID), nil, "hive:someone", "2025-09-06T00:00:00", "pt")
 	pollExec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", pollID)), nil, "hive:someone", "2025-09-07T00:00:00", "px")
-	assert.False(t, pollExec.Success, "a poll executed its payout rider")
+	assertAborts(t, pollExec, "proposal is closed", "a poll executed its payout rider")
 }
 
 // ============================================================================

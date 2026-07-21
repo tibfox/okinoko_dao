@@ -142,9 +142,16 @@ func CreateProposal(payload *string) *string {
 	}
 
 	saveProposal(prpsl)
-	if prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
-		incrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
-	}
+	// Payout locks are deliberately NOT taken here; see TallyProposal.
+	//
+	// Locking at creation let ANY member freeze ANY other member's stake without
+	// their consent: naming a victim as the beneficiary of a 0.001 payout blocked
+	// their project_leave and their removal via kick_member until the proposal was
+	// tallied, which cannot happen before the creator-chosen deadline, while
+	// proposal_cancel is restricted to the creator and owner. The victim had no way
+	// out, and stacking proposals defeated a per-proposal cancel. That reproduced a
+	// stake freeze until 2035 and defeated the same escape-hatch invariant the
+	// owner-veto guard in CancelProposal exists to protect.
 	for i, optInput := range input.OptionsList {
 		opt := ProposalOption{
 			Text: optInput.Text,
@@ -186,7 +193,16 @@ func TallyProposal(proposalId *string) *string {
 		sdk.Abort(fmt.Sprintf("proposal still running until %s", time.Unix(deadline, 0).UTC().Format(time.RFC3339)))
 	}
 
-	// find best option (on tie, higher index wins)
+	// Find the winning option. On a TIE the LOWEST index wins (strict >), which on
+	// the default [no, yes] ballot means a dead-even vote resolves to "no" and the
+	// proposal does not execute.
+	//
+	// This used to be >=, so the highest index won ties — and ApproveOptionIndex is
+	// the higher index on the default ballot, meaning an exactly-split vote counted
+	// as approval. The 50.001% default threshold hides it, but any project
+	// configuring a round 50% threshold (permitted, MinThresholdPercent is 1.0)
+	// would approve proposals that half its membership voted against. A tie is an
+	// absence of consensus; it must fail closed.
 	var totalVotes float64
 	highestOptionId := -1
 	highestOptionValue := float64(0)
@@ -196,7 +212,7 @@ func TallyProposal(proposalId *string) *string {
 		weight := AmountToFloat(opt.WeightTotal)
 		totalVotes += weight
 
-		if weight >= highestOptionValue {
+		if weight > highestOptionValue {
 			highestOptionValue = weight
 			highestOptionId = i
 		}
@@ -239,8 +255,14 @@ func TallyProposal(proposalId *string) *string {
 			}
 		}
 	}
-	if prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
-		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
+	// Take the payout locks now, and ONLY if the DAO actually approved the payout.
+	// Released in ExecuteProposal once the funds have moved. A mere request from one
+	// member no longer restricts anyone; a payout the membership has voted through
+	// does. This is also strictly stronger than locking at creation, which released
+	// the lock right here and left the approved-but-unexecuted window — the one
+	// where funds are genuinely promised — completely unlocked.
+	if prpsl.State == ProposalPassed && prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
+		incrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 	}
 
 	saveProposal(prpsl)
@@ -325,6 +347,8 @@ func ExecuteProposal(proposalID *string) *string {
 				emitFundsRemoved(prj.ID, AddressToString(entry.Address), AmountToFloat(entry.Amount), AssetToString(asset), false)
 				fundsTransferred = true
 			}
+			// Promised funds have now moved: release the exit locks taken at tally.
+			decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
 		}
 		if prpsl.Outcome.Meta != nil {
 			// meta change — iterate keys in sorted order so every validator applies
@@ -736,9 +760,9 @@ func CancelProposal(payload *string) *string {
 	prpsl.ResultOptionID = -1
 	prpsl.ExecutableAt = 0
 
-	if prpsl.Outcome != nil && len(prpsl.Outcome.Payout) > 0 {
-		decrementPayoutLocks(prpsl.ProjectID, prpsl.Outcome.Payout)
-	}
+	// No lock release here: CancelProposal requires ProposalActive (checked above),
+	// and locks are only taken once a proposal reaches ProposalPassed, so an active
+	// proposal never holds one.
 
 	saveProposal(prpsl)
 	emitProposalStateChangedEvent(prpsl.ID, prpsl.State)

@@ -28,7 +28,7 @@ func TestBreak_PauseBypassPayoutRider(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "a payout+toggle_pause proposal executed while paused")
+	assertAborts(t, exec, "project is paused", "a payout+toggle_pause proposal executed while paused")
 	assert.Equal(t, before, after, "payout drained the treasury while paused via a toggle_pause rider")
 }
 
@@ -41,7 +41,7 @@ func TestBreak_PauseRiderCreationRejected(t *testing.T) {
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", pid)), nil, "hive:someone", true, uint(1_000_000_000))
 	fields := []string{strconv.FormatUint(pid, 10), "p", "d", "1", "", "0", "hive:someone:1.000:hive", "toggle_pause=1", ""}
 	res := rawCallAt(ct, "proposal_create", PayloadString(joinPipe(fields)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a toggle_pause proposal with a payout rider was created while paused")
+	assertAborts(t, res, "project is paused", "a toggle_pause proposal with a payout rider was created while paused")
 }
 
 // R4-2: same bypass via an ICC rider on a toggle_pause proposal (created before the
@@ -63,7 +63,7 @@ func TestBreak_PauseBypassICCRider(t *testing.T) {
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", pid)), nil, "hive:someone", true, uint(1_000_000_000))
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "an ICC executed while paused via a toggle_pause rider")
+	assertAborts(t, res, "project is paused", "an ICC executed while paused via a toggle_pause rider")
 }
 
 // R4-3: a payout-only proposal cannot be CREATED while paused (baseline: the pause
@@ -75,7 +75,7 @@ func TestBreak_PayoutProposalRejectedWhilePaused(t *testing.T) {
 	CallContract(t, ct, "project_pause", PayloadString(fmt.Sprintf("%d|true", pid)), nil, "hive:someone", true, uint(1_000_000_000))
 	fields := []string{strconv.FormatUint(pid, 10), "p", "d", "1", "", "0", "hive:someone:1.000:hive", "", ""}
 	res := rawCallAt(ct, "proposal_create", PayloadString(joinPipe(fields)), transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a payout proposal was created while the project was paused")
+	assertAborts(t, res, "project is paused", "a payout proposal was created while the project was paused")
 }
 
 // R4-4: several independent meta updates in one proposal all take effect.
@@ -104,7 +104,7 @@ func TestBreak_ConflictingOwnerMetaRejected(t *testing.T) {
 	res := rawCallAt(ct, "proposal_create",
 		PayloadString(fmt.Sprintf("%d|p|d|1||0||update_owner=hive:someoneelse;remove_owner=1|", pid)),
 		transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
-	assert.False(t, res.Success, "a proposal with conflicting update_owner+remove_owner was accepted")
+	assertAborts(t, res, "conflicting owner directives (update_owner and remove_owner)", "a proposal with conflicting update_owner+remove_owner was accepted")
 }
 
 // R4-6: duplicate payout entries to the same address pay that address once per
@@ -143,7 +143,7 @@ func TestBreak_PayoutExactlyDrainsThenInsufficient(t *testing.T) {
 	assert.True(t, voteRaw(ct, p2, "hive:someoneelse", "1", "b2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(p2), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", p2)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "overspending the treasury succeeded")
+	assertAborts(t, res, "insufficient hive funds in treasury", "overspending the treasury succeeded")
 }
 
 // R4-8: a sole owner of a one-member project cannot leave (no other member to take
@@ -152,7 +152,7 @@ func TestBreak_SoleOwnerCannotLeave(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct) // creator is sole member+owner
 	res := rawCallAt(ct, "project_leave", PayloadUint64(pid), nil, "hive:someone", defaultTimestamp, "l")
-	assert.False(t, res.Success, "sole owner left, orphaning the project")
+	assertAborts(t, res, "owner must transfer ownership before leaving", "sole owner left, orphaning the project")
 }
 
 // R4-9: a passed proposal in an autonomous project (owner removed) can still be

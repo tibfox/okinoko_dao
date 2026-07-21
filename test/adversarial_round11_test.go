@@ -27,7 +27,7 @@ func TestBreak_OwnerCannotCancelPauseEscapeProposal(t *testing.T) {
 	assert.True(t, ok, "escape proposal could not be created")
 	// the owner must not be able to veto it
 	res := rawCallAt(ct, "proposal_cancel", PayloadUint64(propID), nil, "hive:someone", defaultTimestamp, "veto")
-	assert.False(t, res.Success, "owner vetoed the pause/ownership recovery proposal")
+	assertAborts(t, res, "owner cannot cancel a pause/ownership recovery proposal", "owner vetoed the pause/ownership recovery proposal")
 	// its own creator may still withdraw it
 	own := rawCallAt(ct, "proposal_cancel", PayloadUint64(propID), nil, "hive:someoneelse", defaultTimestamp, "self")
 	assert.True(t, own.Success, "creator could not cancel their own proposal: %s", own.Ret)
@@ -100,7 +100,7 @@ func TestBreak_SameBlockTopUpDoesNotCountForThatProposal(t *testing.T) {
 	before := hiveBal(ct, "hive:someoneelse")
 	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
 	after := hiveBal(ct, "hive:someoneelse")
-	assert.False(t, exec.Success, "same-block top-up pushed a 40/101 voter over a 50% threshold")
+	assertAborts(t, exec, "proposal is failed", "same-block top-up pushed a 40/101 voter over a 50%% threshold")
 	assert.Equal(t, before, after, "same-block top-up bought a payout")
 }
 
@@ -112,7 +112,7 @@ func TestBreak_SingleQuoteMetaDoesNotTrap(t *testing.T) {
 		res := rawCallAt(ct, "proposal_create",
 			PayloadString(fmt.Sprintf("%d|p|d|1||0||%s|", pid, q)),
 			transferIntent("1.000"), "hive:someone", defaultTimestamp, "q"+q)
-		assert.False(t, res.Success, "single-quote meta %q was accepted", q)
+		assertAborts(t, res, "invalid metadata entry (use key=value)", "single-quote meta %q was accepted", q)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestBreak_HugeVoteChoiceRejected(t *testing.T) {
 	propID := createSimpleProposal(t, ct, pid, "1")
 	for _, choice := range []string{"4294967296", "4294967297", "18446744073709551615"} {
 		res := rawCallAt(ct, "proposals_vote", PayloadString(fmt.Sprintf("%d|%s", propID, choice)), nil, "hive:someone", defaultTimestamp, "c"+choice)
-		assert.False(t, res.Success, "vote choice %s was accepted (32-bit truncation)", choice)
+		assertAborts(t, res, "invalid option index", "vote choice %s was accepted (32-bit truncation)", choice)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestBreak_ContractInitRejectsUnknownMode(t *testing.T) {
 	for _, mode := range []string{"Public", "pub", "owner_only", "", "PUBLIC"} {
 		ct := SetupContractTestUninitialized()
 		res := rawCallAt(ct, "contract_init", PayloadString(mode), nil, "hive:someone", defaultTimestamp, "i")
-		assert.False(t, res.Success, "contract_init accepted bogus mode %q", mode)
+		assertAborts(t, res, "permission mode must be exactly", "contract_init accepted bogus mode %q", mode)
 	}
 }
 

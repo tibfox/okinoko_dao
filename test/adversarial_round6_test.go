@@ -14,7 +14,9 @@ import (
 	ledgerDb "vsc-node/modules/db/vsc/ledger"
 )
 
-func hbdBal(ct *test_utils.ContractTest, acct string) int64 { return ct.GetBalance(acct, ledgerDb.AssetHbd) }
+func hbdBal(ct *test_utils.ContractTest, acct string) int64 {
+	return ct.GetBalance(acct, ledgerDb.AssetHbd)
+}
 
 // addTreasuryAsset donates a specific asset to a project's treasury (toStake=false).
 func addTreasuryAsset(t *testing.T, ct *test_utils.ContractTest, pid uint64, amount, token, user string) {
@@ -26,7 +28,7 @@ func TestBreak_MultiAssetPayoutBothTransfer(t *testing.T) {
 	ct := SetupContractTest()
 	pid := createDefaultProject(t, ct) // FundsAsset = HIVE
 	joinProjectMember(t, ct, pid, "hive:someoneelse")
-	addTreasuryFunds(t, ct, pid, "2.000")          // HIVE
+	addTreasuryFunds(t, ct, pid, "2.000")                        // HIVE
 	addTreasuryAsset(t, ct, pid, "2.000", "hbd", "hive:someone") // HBD
 	propID := createPollProposal(t, ct, pid, "1", "hive:someoneelse:1.000:hive;hive:member2:1.000:hbd", "")
 	assert.True(t, voteRaw(ct, propID, "hive:someone", "1", "v1").Success)
@@ -51,7 +53,7 @@ func TestBreak_CrossAssetPayoutCannotDrainOther(t *testing.T) {
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	h0 := hiveBal(ct, "hive:someoneelse")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "a payout with an unfunded HBD leg executed")
+	assertAborts(t, res, "insufficient hbd funds in treasury", "a payout with an unfunded HBD leg executed")
 	assert.Equal(t, h0, hiveBal(ct, "hive:someoneelse"), "HIVE leg leaked despite the HBD leg failing")
 }
 
@@ -82,7 +84,7 @@ func TestBreak_KickOwnerBatchAllOrNothing_DesignNote(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:member2", "1", "v").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "a kick batch including the owner unexpectedly executed")
+	assertAborts(t, res, "cannot kick project owner", "a kick batch including the owner unexpectedly executed")
 	assert.Contains(t, res.Ret, "cannot kick project owner", "batch aborted for the wrong reason: %s", res.Ret)
 	// The owner remains the owner (owner-only pause still works).
 	assert.True(t, rawCallAt(ct, "project_pause", PayloadUint64(pid), nil, "hive:someone", lateTS, "p").Success, "owner lost ownership after a failed kick batch")
@@ -135,7 +137,7 @@ func TestBreak_WhitelistAddRemoveSameProposalDeterministic(t *testing.T) {
 	assert.True(t, rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e").Success)
 	// deterministic outcome: someoneelse ends NOT whitelisted -> join must fail
 	res := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", lateTS, "j")
-	assert.False(t, res.Success, "add+remove in one proposal left the address whitelisted (nondeterministic?)")
+	assertAborts(t, res, "whitelist approval required", "add+remove in one proposal left the address whitelisted (nondeterministic?)")
 }
 
 // R6-8: two intents for the SAME asset in one AddFunds cannot double-draw (host
@@ -148,7 +150,7 @@ func TestBreak_DuplicateSameAssetIntentReverts(t *testing.T) {
 		{Type: "transfer.allow", Args: map[string]string{"limit": "1.000", "token": "hive"}},
 	}
 	res := rawCallAt(ct, "project_funds", PayloadUint64(pid), dupIntents, "hive:someone", defaultTimestamp, "d")
-	assert.False(t, res.Success, "two same-asset intents double-drew into the treasury")
+	assertAborts(t, res, "add funds payload requires projectId|toStake", "two same-asset intents double-drew into the treasury")
 }
 
 // R6-9: an ICC requesting more of an asset than the treasury holds aborts and
@@ -167,7 +169,7 @@ func TestBreak_ICCInsufficientTreasuryAborts(t *testing.T) {
 	assert.True(t, voteRaw(ct, propID, "hive:someoneelse", "1", "v2").Success)
 	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
 	res := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
-	assert.False(t, res.Success, "an ICC over-drawing the treasury executed")
+	assertAborts(t, res, "insufficient hive funds in treasury for ICC", "an ICC over-drawing the treasury executed")
 }
 
 // R6-10: DESIGN NOTE / KNOWN LIMITATION — the ICC path debits the treasury by the

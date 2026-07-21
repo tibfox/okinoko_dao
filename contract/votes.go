@@ -208,11 +208,29 @@ func VoteProposal(payload *string) *string {
 		saveProposalOption(prpsl.ID, idx32, optionCache[idx32])
 	}
 
-	// Voting re-arms the leave cooldown: a pre-armed "exit requested" would
-	// otherwise let a member vote and withdraw their stake in the very next call
-	// (vote-and-run), which the cooldown exists to prevent.
+	// Voting locks this member's stake until the proposal they just voted on is
+	// decided, and re-arms the leave cooldown.
+	//
+	// The cooldown alone did not prevent vote-and-run: it only delays a leave by
+	// LeaveCooldownHours, so whenever that is shorter than the proposal's voting
+	// period — the 24h/24h default sits exactly on the boundary, and any
+	// longer-running proposal clears it — a member could cast a full-weight ballot
+	// and completely exit before the tally. Nothing decrements their weight on
+	// leave and StakeSnapshot is frozen at creation, so the ballot still counted at
+	// 100% strength from an account with zero remaining exposure. Holding stake
+	// until the deadline means voters keep skin in the game for the decision they
+	// influenced.
+	deadline := prpsl.CreatedAt + int64(prpsl.DurationHours)*3600
+	memberChanged := false
+	if deadline > member.VoteLockUntil {
+		member.VoteLockUntil = deadline
+		memberChanged = true
+	}
 	if member.ExitRequested != 0 {
 		member.ExitRequested = 0
+		memberChanged = true
+	}
+	if memberChanged {
 		saveMember(prj.ID, &member)
 	}
 

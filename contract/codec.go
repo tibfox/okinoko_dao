@@ -147,6 +147,7 @@ func encodeMember(w *binWriter, m *Member) {
 	w.writeInt64(m.Reputation)
 	w.writeUint64(m.StakeIncrement)
 	w.writeUint64(m.JoinSeq)
+	w.writeInt64(m.VoteLockUntil)
 }
 
 // EncodeMember packs a Member into bytes so storage stays lean and no json noise leaks.
@@ -561,6 +562,9 @@ func decodeMember(r *binReader) (Member, error) {
 	// silently present the member as the project's founder — the earliest possible
 	// sequence — and hand them voting rights on every proposal. Fail instead.
 	if m.JoinSeq, err = r.readUint64(); err != nil {
+		return m, err
+	}
+	if m.VoteLockUntil, err = r.readInt64(); err != nil {
 		return m, err
 	}
 	return m, nil
