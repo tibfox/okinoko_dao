@@ -180,6 +180,47 @@ func TestBreak_NFTGateRejectsUnsafeTokenId(t *testing.T) {
 	assertAborts(t, res, "invalid character in membership nft id", "unsafe token id was accepted")
 }
 
+// R3-7g: the gate needs contract+function+id all set. With the id blank it is
+// inactive, so a non-holder joins freely even though the mock would say "no".
+func TestBreak_NFTGateInactiveWithoutTokenId(t *testing.T) {
+	ct := SetupContractTest()
+	registerMock(ct)
+	fields := defaultProjectFields()
+	fields[10] = MockID
+	fields[11] = "nft_balance_zero" // would block if the gate were active
+	fields[12] = ""                 // no token id -> gate inactive
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(strings.Join(fields, "|")),
+		transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	pid := parseCreatedID(t, res.Ret, "project")
+	join := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", defaultTimestamp, "j")
+	assert.True(t, join.Success, "gate blocked a join despite no token id set: %s", join.Ret)
+}
+
+// R3-7h: update_membershipNFT via a passed proposal accepts a string token id.
+func TestBreak_NFTIdUpdateViaProposalAcceptsStringId(t *testing.T) {
+	ct := SetupContractTest()
+	pid := makeProject(t, ct, "1", "50.000", "1") // stake project, creator hive:someone
+	joinWithStake(t, ct, pid, "hive:member2", "100.000")
+	propID := createPollProposal(t, ct, pid, "1", "", "update_membershipNFT=alicante-999")
+	assert.True(t, voteRaw(ct, propID, "hive:member2", "1", "v").Success)
+	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
+	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
+	assert.True(t, exec.Success, "string membership nft id rejected via proposal meta: %s", exec.Ret)
+}
+
+// R3-7i: update_membershipNFT via proposal rejects an unsafe (JSON-breaking) id
+// at execution time.
+func TestBreak_NFTIdUpdateViaProposalRejectsUnsafeId(t *testing.T) {
+	ct := SetupContractTest()
+	pid := makeProject(t, ct, "1", "50.000", "1")
+	joinWithStake(t, ct, pid, "hive:member2", "100.000")
+	propID := createPollProposal(t, ct, pid, "1", "", `update_membershipNFT=a"b`)
+	assert.True(t, voteRaw(ct, propID, "hive:member2", "1", "v").Success)
+	rawCallAt(ct, "proposal_tally", PayloadUint64(propID), nil, "hive:someone", lateTS, "t")
+	exec := rawCallAt(ct, "proposal_execute", PayloadString(fmt.Sprintf("%d", propID)), nil, "hive:someone", lateTS, "e")
+	assertAborts(t, exec, "invalid character in membership nft id", "unsafe id accepted via proposal meta")
+}
+
 // R3-8: an active proposal cannot be cancelled twice.
 func TestBreak_DoubleCancelRejected(t *testing.T) {
 	ct := SetupContractTest()
