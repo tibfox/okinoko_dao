@@ -150,6 +150,36 @@ func TestBreak_NFTGateBalancePositiveAdmits(t *testing.T) {
 	assert.True(t, join.Success, "positive balanceOf holder was refused membership: %s", join.Ret)
 }
 
+// R3-7e: a string token id (magi_nft ids are strings like "alicante-991", not
+// numeric) is accepted and gates via balanceOf.
+func TestBreak_NFTGateStringTokenId(t *testing.T) {
+	ct := SetupContractTest()
+	registerMock(ct)
+	fields := defaultProjectFields()
+	fields[10] = MockID
+	fields[11] = "nft_balance_two" // holder
+	fields[12] = "alicante-991"    // string token id
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(strings.Join(fields, "|")),
+		transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	pid := parseCreatedID(t, res.Ret, "project")
+	join := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", defaultTimestamp, "j")
+	assert.True(t, join.Success, "string-id NFT gate refused a holder: %s", join.Ret)
+}
+
+// R3-7f: a token id containing a JSON-breaking quote is rejected at create time
+// (the id is substituted raw into the balanceOf JSON payload).
+func TestBreak_NFTGateRejectsUnsafeTokenId(t *testing.T) {
+	ct := SetupContractTest()
+	registerMock(ct)
+	fields := defaultProjectFields()
+	fields[10] = MockID
+	fields[11] = "nft_balance_two"
+	fields[12] = `a"b` // a quote would corrupt the JSON membership call
+	res := rawCallAt(ct, "project_create", PayloadString(strings.Join(fields, "|")),
+		transferIntent("1.000"), "hive:someone", defaultTimestamp, "c")
+	assertAborts(t, res, "invalid character in membership nft id", "unsafe token id was accepted")
+}
+
 // R3-8: an active proposal cannot be cancelled twice.
 func TestBreak_DoubleCancelRejected(t *testing.T) {
 	ct := SetupContractTest()

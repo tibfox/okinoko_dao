@@ -52,6 +52,10 @@ const (
 	// ("hive:<username>") are short; this cap keeps forged keys/records from
 	// bloating state.
 	MaxAddressLength = 128
+	// MaxTokenIdLength bounds a membership NFT token id. magi_nft token ids are
+	// arbitrary strings (e.g. "alicante-991"), so the id must stay short and safe
+	// to embed in the pipe-delimited create payload and the JSON membership call.
+	MaxTokenIdLength = 128
 	// MaxKickAddresses limits the number of addresses per kick_member operation.
 	MaxKickAddresses = 50
 	// MaxMetaLength bounds the outcome-meta blob. It must accommodate the largest

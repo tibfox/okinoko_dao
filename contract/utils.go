@@ -116,6 +116,26 @@ func AddressToString(a sdk.Address) string { return a.String() }
 // ("hive:<username>") never contains them. Colons are intentionally allowed
 // because they are part of the address itself. Call this at every point where an
 // address first enters from an untrusted payload.
+// validateTokenId aborts if id is unusable as a membership NFT token id. Called
+// only for a non-empty id. magi_nft ids are arbitrary strings, but they get
+// substituted raw into the pipe-delimited create payload and the JSON membership
+// call, so reject over-length ids and any character that would corrupt those:
+// '|' (create field separator), '"' and '\' (JSON), and control/whitespace bytes.
+func validateTokenId(id string) {
+	if id == "" {
+		sdk.Abort("membership nft id required")
+	}
+	if len(id) > MaxTokenIdLength {
+		sdk.Abort("membership nft id exceeds maximum length")
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if c == '|' || c == '"' || c == '\\' || c <= ' ' {
+			sdk.Abort("invalid character in membership nft id")
+		}
+	}
+}
+
 func validateAddress(addr sdk.Address) {
 	s := addr.String()
 	if s == "" {

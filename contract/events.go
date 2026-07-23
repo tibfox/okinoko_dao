@@ -123,7 +123,7 @@ func emitProjectCreatedEvent(project *Project, createdByAddress string) {
 		project.Config.StakeMinAmt,
 		formatOptionalString(project.Config.MembershipNFTContract),
 		formatOptionalString(project.Config.MembershipNFTContractFunction),
-		formatOptionalUint(project.Config.MembershipNFT),
+		formatOptionalString(project.Config.MembershipNFT),
 		sanitizeEventValue(project.Config.MembershipNftPayloadFormat),
 		strconv.FormatBool(project.Config.ProposalsMembersOnly),
 		strconv.FormatBool(project.Config.WhitelistOnly),

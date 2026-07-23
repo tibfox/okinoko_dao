@@ -106,7 +106,7 @@ type ProjectConfig struct {
 	StakeMinAmt                   float64
 	MembershipNFTContract         *string
 	MembershipNFTContractFunction *string
-	MembershipNFT                 *uint64
+	MembershipNFT                 *string
 	MembershipNftPayloadFormat    string
 	ProposalsMembersOnly          bool
 	WhitelistOnly                 bool

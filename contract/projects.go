@@ -398,7 +398,7 @@ func checkNFTMembership(prj *Project, callerAddr sdk.Address) bool {
 
 	payload := formatMembershipPayload(
 		prj.Config.MembershipNftPayloadFormat,
-		UInt64ToString(*prj.Config.MembershipNFT),
+		*prj.Config.MembershipNFT,
 		AddressToString(callerAddr),
 	)
 

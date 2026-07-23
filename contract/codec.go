@@ -131,7 +131,7 @@ func encodeProjectConfig(w *binWriter, cfg *ProjectConfig) {
 	w.writeFloat64(cfg.StakeMinAmt)
 	w.writeOptionalString(cfg.MembershipNFTContract)
 	w.writeOptionalString(cfg.MembershipNFTContractFunction)
-	w.writeOptionalUint64(cfg.MembershipNFT)
+	w.writeOptionalString(cfg.MembershipNFT)
 	w.writeString(cfg.MembershipNftPayloadFormat)
 	w.writeBool(cfg.ProposalsMembersOnly)
 	w.writeBool(cfg.WhitelistOnly)
@@ -511,7 +511,7 @@ func decodeProjectConfig(r *binReader) (ProjectConfig, error) {
 	if cfg.MembershipNFTContractFunction, err = r.readOptionalString(); err != nil {
 		return cfg, err
 	}
-	if cfg.MembershipNFT, err = r.readOptionalUint64(); err != nil {
+	if cfg.MembershipNFT, err = r.readOptionalString(); err != nil {
 		return cfg, err
 	}
 	if cfg.MembershipNftPayloadFormat, err = r.readString(); err != nil {

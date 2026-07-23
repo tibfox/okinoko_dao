@@ -445,13 +445,11 @@ func ExecuteProposal(proposalID *string) *string {
 					metaChanged = true
 					configChanged = true
 				case "update_membershipNFT":
-					v, err := strconv.ParseUint(value, 10, 64)
-					if err != nil {
-						sdk.Abort("invalid membership nft update")
-					}
+					v := strings.TrimSpace(value)
+					validateTokenId(v)
 					prev := ""
 					if prj.Config.MembershipNFT != nil {
-						prev = fmt.Sprintf("%d", *prj.Config.MembershipNFT)
+						prev = *prj.Config.MembershipNFT
 					}
 					prj.Config.MembershipNFT = &v
 					emitProposalConfigUpdatedEvent(prj.ID, prpsl.ID, "membershipNFT", prev, value)

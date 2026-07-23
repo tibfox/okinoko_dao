@@ -64,11 +64,10 @@ func decodeCreateProjectArgs(payload *string) *CreateProjectArgs {
 		cfg.MembershipNFTContractFunction = strptr(v)
 	}
 	if v := strings.TrimSpace(get(12)); v != "" {
-		parsed, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			sdk.Abort("invalid membership nft id")
-		}
-		cfg.MembershipNFT = &parsed
+		// magi_nft token ids are arbitrary strings (e.g. "alicante-991"), not
+		// necessarily numeric — store the id verbatim after a safety check.
+		validateTokenId(v)
+		cfg.MembershipNFT = strptr(v)
 	}
 	cfg.ProposalsMembersOnly = parseCreatorRestrictionField(get(14))
 	if v := strings.TrimSpace(get(15)); v != "" {
