@@ -118,6 +118,38 @@ func TestBreak_NFTGateAdmitsHolder(t *testing.T) {
 	assert.True(t, join.Success, "NFT holder was refused membership: %s", join.Ret)
 }
 
+// R3-7c: a magi_nft/ERC-1155 balanceOf gate rejects a caller whose balance is 0.
+// balanceOf answers {"balance":0}, which is never "[]"/"" — the gate must parse
+// the balance and treat 0 as "not owned".
+func TestBreak_NFTGateBalanceZeroBlocksJoin(t *testing.T) {
+	ct := SetupContractTest()
+	registerMock(ct)
+	fields := defaultProjectFields()
+	fields[10] = MockID
+	fields[11] = "nft_balance_zero" // {"balance":0} -> not a holder
+	fields[12] = "1"
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(strings.Join(fields, "|")),
+		transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	pid := parseCreatedID(t, res.Ret, "project")
+	join := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", defaultTimestamp, "j")
+	assertAborts(t, join, "membership nft not owned", "balanceOf==0 was treated as ownership")
+}
+
+// R3-7d: the mirror — a positive balanceOf balance admits the caller.
+func TestBreak_NFTGateBalancePositiveAdmits(t *testing.T) {
+	ct := SetupContractTest()
+	registerMock(ct)
+	fields := defaultProjectFields()
+	fields[10] = MockID
+	fields[11] = "nft_balance_two" // {"balance":2} -> holder
+	fields[12] = "1"
+	res, _, _ := CallContract(t, ct, "project_create", PayloadString(strings.Join(fields, "|")),
+		transferIntent("1.000"), "hive:someone", true, uint(1_000_000_000))
+	pid := parseCreatedID(t, res.Ret, "project")
+	join := rawCallAt(ct, "project_join", PayloadUint64(pid), transferIntent("1.000"), "hive:someoneelse", defaultTimestamp, "j")
+	assert.True(t, join.Success, "positive balanceOf holder was refused membership: %s", join.Ret)
+}
+
 // R3-8: an active proposal cannot be cancelled twice.
 func TestBreak_DoubleCancelRejected(t *testing.T) {
 	ct := SetupContractTest()

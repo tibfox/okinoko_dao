@@ -128,3 +128,20 @@ func NftNone(payload *string) *string {
 	none := "[]"
 	return &none
 }
+
+// NftBalanceZero / NftBalanceTwo mimic a magi_nft / ERC-1155 balanceOf reply,
+// which is {"balance":N} rather than a JSON array. checkNFTMembership must read
+// the balance and treat 0 as "not owned"; without that a zero balance (never
+// "[]" or "") would wrongly satisfy the gate.
+//
+//go:wasmexport nft_balance_zero
+func NftBalanceZero(payload *string) *string {
+	resp := "{\"balance\":0}"
+	return &resp
+}
+
+//go:wasmexport nft_balance_two
+func NftBalanceTwo(payload *string) *string {
+	resp := "{\"balance\":2}"
+	return &resp
+}

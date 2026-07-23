@@ -403,7 +403,49 @@ func checkNFTMembership(prj *Project, callerAddr sdk.Address) bool {
 	)
 
 	editions := sdk.ContractCall(contractName, functionName, payload, nil)
-	return editions != nil && *editions != "[]" && *editions != ""
+	if editions == nil {
+		return false
+	}
+	resp := strings.TrimSpace(*editions)
+	// Empty or an empty JSON array means the caller owns nothing.
+	if resp == "" || resp == "[]" {
+		return false
+	}
+	// ERC-1155 / magi_nft contracts answer an ownership read (balanceOf) with
+	// {"balance":N}. That is never "[]"/"", so without this a zero balance would
+	// wrongly pass the gate — require a positive balance instead.
+	if bal, ok := parseBalanceResponse(resp); ok {
+		return bal > 0
+	}
+	// Any other non-empty, non-empty-array response (e.g. a contract that returns
+	// a JSON array of owned editions like "[1]") means ownership.
+	return true
+}
+
+// parseBalanceResponse extracts N from an ERC-1155 {"balance":N} response.
+// Returns (0,false) when the response is not a balance object, so callers can
+// fall back to the array-style ownership convention. Whitespace-tolerant and
+// dependency-free to stay TinyGo-friendly.
+func parseBalanceResponse(resp string) (uint64, bool) {
+	idx := strings.Index(resp, "\"balance\"")
+	if idx < 0 {
+		return 0, false
+	}
+	rest := resp[idx+len("\"balance\""):]
+	i := 0
+	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == ':') {
+		i++
+	}
+	start := i
+	var n uint64
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		n = n*10 + uint64(rest[i]-'0')
+		i++
+	}
+	if i == start {
+		return 0, false
+	}
+	return n, true
 }
 
 // AddFunds handles deposits to treasury and/or stake with support for multiple assets.
