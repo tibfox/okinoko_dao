@@ -349,6 +349,101 @@ func LeaveProject(projectID *string) *string {
 	return strptr("exit finished")
 }
 
+// UnstakeProject withdraws PART of a member's stake while keeping their
+// membership. Two-phase like project_leave: the first call (with an amount)
+// arms the request and starts the owner-configured leave cooldown; a second
+// call after the cooldown — and once any proposal the member voted on has
+// settled — completes the withdrawal. The remaining stake must stay at or above
+// StakeMinAmt; to go lower, use project_leave to exit fully.
+//
+// Payload: "<projectId>|<amount>" to request; "<projectId>" to finalize.
+//
+//go:wasmexport project_unstake
+func UnstakeProject(payload *string) *string {
+	requireInitialized()
+	raw := unwrapPayload(payload, "unstake payload required")
+	parts := strings.Split(raw, "|")
+	projectID := parseEntityIDField(parts[0], "project id")
+
+	caller := getActorAddress()
+	callerAddr := caller
+	prj := loadProject(projectID)
+	if prj.Paused {
+		sdk.Abort("project paused")
+	}
+	// Democratic members hold a fixed one-vote stake (== StakeMinAmt); there is
+	// nothing to partially withdraw without dropping below the minimum.
+	if prj.Config.VotingSystem == VotingSystemDemocratic {
+		sdk.Abort("partial unstake not supported in one-member-one-vote projects")
+	}
+
+	member := getMember(prj.ID, callerAddr)
+	now := nowUnix()
+
+	// Phase 1: no request armed -> validate and arm it with the requested amount.
+	if member.UnstakeRequested == 0 {
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			sdk.Abort("unstake payload requires projectId|amount")
+		}
+		amount := FloatToAmount(mustParseFloat(strings.TrimSpace(parts[1]), "invalid unstake amount"))
+		if amount <= 0 {
+			sdk.Abort("unstake amount must be positive")
+		}
+		if amount > member.Stake {
+			sdk.Abort("unstake amount exceeds your stake")
+		}
+		if member.Stake-amount < FloatToAmount(prj.Config.StakeMinAmt) {
+			sdk.Abort("remaining stake would fall below the minimum — use project_leave to exit fully")
+		}
+		member.UnstakeRequested = now
+		member.UnstakePending = amount
+		saveMember(prj.ID, &member)
+		return strptr("unstake requested")
+	}
+
+	// Phase 2: finalize the pending request once the cooldown has passed and no
+	// voted-on proposal is still running.
+	if now-member.UnstakeRequested < int64(prj.Config.LeaveCooldownHours*3600) {
+		sdk.Abort("cooldown not passed")
+	}
+	if now < member.VoteLockUntil {
+		sdk.Abort(fmt.Sprintf("stake locked until %s: you voted on a proposal that is still running",
+			time.Unix(member.VoteLockUntil, 0).UTC().Format(time.RFC3339)))
+	}
+
+	// The stake may have shrunk since the request (another partial unstake is
+	// impossible while one is armed, but StakeMin could have been raised); clamp.
+	amount := member.UnstakePending
+	if amount > member.Stake {
+		amount = member.Stake
+	}
+	member.UnstakeRequested = 0
+	member.UnstakePending = 0
+	if amount <= 0 {
+		saveMember(prj.ID, &member)
+		return strptr("unstake finished")
+	}
+
+	sdk.HiveTransfer(caller, AmountToInt64(amount), prj.FundsAsset)
+	member.Stake -= amount
+	member.LastActionAt = now
+	member.StakeIncrement++
+	// Stamp the reduced stake so FUTURE proposals snapshot it. The +1 offset keeps
+	// a same-block proposal's denominator unaffected, matching stake top-ups; a
+	// voter's weight on already-open proposals is capped at current stake in
+	// VoteProposal, so a lower balance cannot vote with the old snapshot.
+	saveStakeHistory(prj.ID, callerAddr, member.Stake, now+1, member.StakeIncrement)
+	saveMember(prj.ID, &member)
+
+	if prj.StakeTotal < amount {
+		sdk.Abort("accounting error: stake total mismatch")
+	}
+	prj.StakeTotal -= amount
+	saveProjectFinance(prj)
+	emitFundsRemoved(prj.ID, AddressToString(callerAddr), AmountToFloat(amount), AssetToString(prj.FundsAsset), true)
+	return strptr("unstake finished")
+}
+
 // projectJoinSeqKey holds the project's monotonic join counter — the next sequence
 // number to hand out. Kept in its own counter key rather than in ProjectFinance so
 // the join path does not have to re-encode the finance record to allocate one.
@@ -503,6 +598,10 @@ func AddFunds(payload *string) *string {
 			// pre-arm, later top up, vote, and withdraw in the very next call —
 			// defeating the cooldown's stated purpose (blocking vote-and-run).
 			member.ExitRequested = 0
+			// Topping up cancels any pending partial-unstake request too — you
+			// clearly aren't withdrawing if you just added more.
+			member.UnstakeRequested = 0
+			member.UnstakePending = 0
 			saveMember(prj.ID, member)
 			// Stamp top-ups one second AFTER the block time so a top-up landing in
 			// the same block as a proposal's creation cannot count toward that

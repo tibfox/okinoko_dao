@@ -129,6 +129,11 @@ type Member struct {
 	// VoteLockUntil is the deadline of the latest still-undecided proposal this
 	// member has voted on. They cannot complete a leave before it. See VoteProposal.
 	VoteLockUntil int64
+	// UnstakeRequested is the timestamp a partial-unstake request was armed (0 =
+	// none). Like ExitRequested it starts the leave cooldown; UnstakePending is the
+	// amount to withdraw once the cooldown passes. See UnstakeProject.
+	UnstakeRequested int64
+	UnstakePending   Amount
 }
 
 type Project struct {

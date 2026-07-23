@@ -134,6 +134,13 @@ func VoteProposal(payload *string) *string {
 		if weight == 0 {
 			sdk.Abort("no stake history found at proposal creation time")
 		}
+		// A member who withdrew stake after the proposal was created must not vote
+		// with the higher historical snapshot — cap the weight at what they still
+		// hold. (A top-up after creation already cannot raise it, since
+		// getStakeAtTime only sees history entries at or before CreatedAt.)
+		if member.Stake < weight {
+			weight = member.Stake
+		}
 		// check if stakemin is still valid (it can get modified by proposals)
 		if FloatToAmount(prj.Config.StakeMinAmt) > weight {
 			sdk.Abort("minimum stake requirement not met at proposal creation time")

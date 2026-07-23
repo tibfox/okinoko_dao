@@ -148,6 +148,8 @@ func encodeMember(w *binWriter, m *Member) {
 	w.writeUint64(m.StakeIncrement)
 	w.writeUint64(m.JoinSeq)
 	w.writeInt64(m.VoteLockUntil)
+	w.writeInt64(m.UnstakeRequested)
+	w.writeAmount(m.UnstakePending)
 }
 
 // EncodeMember packs a Member into bytes so storage stays lean and no json noise leaks.
@@ -566,6 +568,18 @@ func decodeMember(r *binReader) (Member, error) {
 	}
 	if m.VoteLockUntil, err = r.readInt64(); err != nil {
 		return m, err
+	}
+	// UnstakeRequested + UnstakePending are trailing-optional: members stored
+	// before partial unstake existed have neither, so default both to 0.
+	if r.pos < len(r.data) {
+		if m.UnstakeRequested, err = r.readInt64(); err != nil {
+			return m, err
+		}
+	}
+	if r.pos < len(r.data) {
+		if m.UnstakePending, err = r.readAmount(); err != nil {
+			return m, err
+		}
 	}
 	return m, nil
 }
