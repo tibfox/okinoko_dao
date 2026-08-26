@@ -48,6 +48,12 @@ const (
 	MaxPayoutReceivers = 50
 	// MaxWhitelistAddresses limits the number of addresses per whitelist operation.
 	MaxWhitelistAddresses = 50
+	// MaxCommitmentEntries limits the beneficiary entries a single commit_funds
+	// action may reserve. Each entry is a treasury debit, a committed-balance
+	// credit and a payout lock executed inside one ExecuteProposal, and all of
+	// them are stored on the commitment record that every later release/cancel
+	// reloads — so it is bounded exactly like a payout list.
+	MaxCommitmentEntries = 50
 	// MaxAddressLength bounds any user-supplied address string. Hive addresses
 	// ("hive:<username>") are short; this cap keeps forged keys/records from
 	// bloating state.
@@ -159,6 +165,17 @@ const (
 	kProjectWhitelist byte = 0x06
 	// kProjectTreasury stores per-asset balances in multi-asset treasury.
 	kProjectTreasury byte = 0x07
+	// kProjectCommitted mirrors kProjectTreasury but holds the per-asset total that
+	// passed commit_funds proposals have RESERVED. Committed funds are physically
+	// subtracted from the treasury key, so every existing getTreasuryBalance check
+	// (payouts, ICC assets) already refuses to spend them — this key exists so the
+	// reserved total stays auditable and can be returned on cancel.
+	kProjectCommitted byte = 0x08
+	// kCommitment stores a Commitment record keyed by the id of the proposal that
+	// created it. Using the source proposal's own id (instead of a separate
+	// counter) means the milestone proposal can reference the commitment the
+	// moment the funding proposal is created, before it has even been tallied.
+	kCommitment byte = 0x30
 	// kProposalMeta contains encoded Proposal records.
 	kProposalMeta byte = 0x10
 	// kProposalOption stores ProposalOption entries indexed by proposal+option index.
@@ -176,6 +193,21 @@ const (
 const (
 	VotingSystemDemocratic VotingSystem = 0
 	VotingSystemStake      VotingSystem = 1
+)
+
+// -----------------------------------------------------------------------------
+// Commitment States
+// -----------------------------------------------------------------------------
+
+const (
+	// CommitmentUnset is the zero value, used to detect a missing record.
+	CommitmentUnset CommitmentState = 0
+	// CommitmentPending means the funds are reserved and awaiting a milestone vote.
+	CommitmentPending CommitmentState = 1
+	// CommitmentReleased means the funds have been paid to the beneficiaries.
+	CommitmentReleased CommitmentState = 2
+	// CommitmentCancelled means the funds were returned to the project treasury.
+	CommitmentCancelled CommitmentState = 3
 )
 
 // -----------------------------------------------------------------------------

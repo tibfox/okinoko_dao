@@ -249,3 +249,27 @@ func emitWhitelistEvent(projectId uint64, action string, addresses []sdk.Address
 		strings.Join(addrs, ";"),
 	))
 }
+
+// emitCommitmentEvent logs every transition of a milestone commitment: creation
+// (pending), release, and cancellation.
+//
+// It is one event type with a state field rather than three, so an indexer can
+// replay a commitment's whole life from a single table. The entries ride along
+// on every transition — a release is a real treasury outflow and a cancel is a
+// real return, and both need the amounts without joining back to the creation
+// row.
+//
+// NOTE for consumers: a COMMIT does not emit `fr` (funds removed). The money
+// stays inside the contract, it is only reserved, so treating a commit as an
+// outflow would double-count it against the release that follows. A RELEASE
+// emits `fr` per entry exactly like a direct payout, because that is when the
+// funds actually leave the DAO.
+func emitCommitmentEvent(projectId uint64, proposalId uint64, state CommitmentState, entries []PayoutEntry) {
+	sdk.Log(fmt.Sprintf(
+		"cm|pId:%d|prId:%d|s:%s|entries:%s",
+		projectId,
+		proposalId,
+		state.String(),
+		formatPayoutMap(entries),
+	))
+}
