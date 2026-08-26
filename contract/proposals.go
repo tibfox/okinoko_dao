@@ -575,6 +575,19 @@ func ExecuteProposal(proposalID *string) *string {
 					}
 					metaChanged = true
 					fundsTransferred = true
+				case "commit_funds":
+					// Reserve, do not pay. The money leaves the treasury balance so
+					// nothing else can spend it, but it stays inside the contract until
+					// a second proposal releases or cancels this commitment.
+					commitFunds(prj, prpsl.ID, value)
+					metaChanged = true
+				case "release_commitment":
+					releaseCommitment(prj, prpsl.ID, value)
+					metaChanged = true
+					fundsTransferred = true
+				case "cancel_commitment":
+					cancelCommitment(prj, prpsl.ID, value)
+					metaChanged = true
 				}
 			}
 		}

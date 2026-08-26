@@ -138,3 +138,26 @@ func projectTreasuryKey(projectID uint64, asset sdk.Asset) string {
 	buf = append(buf, assetStr...)
 	return string(buf)
 }
+
+// projectCommittedKey stores a single asset's RESERVED balance for a project.
+// Key format: kProjectCommitted|projectID|asset
+// Value format: {amount}
+//
+// Laid out exactly like projectTreasuryKey: the fixed-width projectID precedes
+// the variable-length asset name, so no two (projectID, asset) pairs collide.
+func projectCommittedKey(projectID uint64, asset sdk.Asset) string {
+	assetStr := asset.String()
+	buf := make([]byte, 0, 1+8+len(assetStr))
+	buf = append(buf, kProjectCommitted)
+	buf = packU64LE(projectID, buf)
+	buf = append(buf, assetStr...)
+	return string(buf)
+}
+
+// commitmentKey addresses a Commitment by the id of the proposal that created it.
+func commitmentKey(proposalID uint64) string {
+	var buf [9]byte
+	buf[0] = kCommitment
+	packU64LEInline(proposalID, buf[1:])
+	return string(buf[:])
+}

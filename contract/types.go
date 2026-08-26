@@ -259,3 +259,36 @@ type AddFundsArgs struct {
 	ProjectID uint64
 	ToStake   bool
 }
+
+// CommitmentState captures a commitment's lifecycle.
+type CommitmentState uint8
+
+// Commitment is the funding a passed `commit_funds` proposal set aside for a
+// later milestone vote. The money is moved out of the project treasury and into
+// the project's committed balance at commit time, so no other proposal can spend
+// it, but it does not reach the beneficiaries until a SECOND proposal carries
+// `release_commitment` (pay out) or `cancel_commitment` (return to treasury).
+//
+// A commitment is keyed by the id of the proposal that created it — see
+// commitmentKey — so ProjectID here is the guard that a milestone proposal in
+// project A cannot release funds committed by project B.
+type Commitment struct {
+	ProjectID uint64
+	State     CommitmentState
+	Entries   []PayoutEntry
+}
+
+// String renders the commitment state for events and logs.
+// Example payload: CommitmentPending.String()
+func (cs CommitmentState) String() string {
+	switch cs {
+	case CommitmentPending:
+		return "pending"
+	case CommitmentReleased:
+		return "released"
+	case CommitmentCancelled:
+		return "cancelled"
+	default:
+		return "unspecified"
+	}
+}

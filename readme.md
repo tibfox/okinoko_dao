@@ -58,6 +58,7 @@ graph TD
     Propose --> YesNo[Yes/No with Actions]
     Propose --> Poll[Polls]
     Propose --> ICC[Inter-Contract Calls]
+    Propose --> Commit[Milestone Commitments]
     Vote --> Change[Can Change Vote]
     Fund --> ToTreasury[To Treasury]
     Fund --> ToStake[To Stake]
@@ -69,6 +70,7 @@ graph TD
     style Vote fill:#fce4ec,stroke:#e91e63,stroke-width:2px
     style Fund fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
     style ICC fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style Commit fill:#ede7f6,stroke:#673ab7,stroke-width:2px
 ```
 
 - **Create a Project**  
@@ -86,6 +88,12 @@ graph TD
   Become a member by sending the required join amount (set by the project).
   - In **Democratic voting** projects, every member’s vote counts equally.
   - In **Stake-based voting**, your vote weight depends on your contribution amount. (Your stake is never used as project funds)
+
+- **Fund Work in Milestones**
+  Approve funding now, release it later. A `commit_funds` proposal sets money aside for a
+  developer; a second proposal releases it once the milestone is met, or cancels it back into
+  the treasury if it is not. The reserved money cannot be spent by anything else in the
+  meantime. See [10.7 Milestone Commitments](#107-milestone-commitments-two-votes-one-payout).
 
 - **Make a Proposal**
   Suggest an action or ask the community a question.
@@ -223,6 +231,35 @@ My recommendation: Use [okinoko.io](https://okinoko.io) as these complex payload
   whitelist management, ownership transfer and owner-cancel. Governance continues to work via proposals.
 - `toggle_pause=1`
 - `kick_member=<address1,address2,...>` - Remove members and refund their stake (cannot kick owner or members with active payouts). Existing votes on active proposals remain valid.
+- `commit_funds=<addr>:<amount>:<asset>[,<addr>:<amount>:<asset>...]` — **reserve** treasury funds for a
+  later milestone vote instead of paying them now. See *Milestone commitments* below.
+- `release_commitment=<proposalId>` — pay out the commitment created by that proposal (milestone met).
+- `cancel_commitment=<proposalId>` — return the commitment's funds to the treasury (milestone missed).
+
+**Milestone commitments (two votes, one payout).** A developer asks for funding; the DAO votes
+`commit_funds` to set the money aside; when the milestone lands, a *second* proposal votes
+`release_commitment` and only then does the money move. If the milestone is missed,
+`cancel_commitment` returns it to the treasury.
+
+The first vote is worth something because `commit_funds` **moves the amount out of the treasury
+balance** and into the project's committed balance. Every spend path in the contract (payout entries,
+ICC asset intents, further commitments) authorises itself against the treasury balance, so from the
+moment a commitment exists nothing else can reach those funds. Without this, an approved-but-unpaid
+payout is only a promise racing every other proposal to the treasury — the balance is checked at
+execute time, not at approval time, so two proposals that each pass for more than the treasury holds
+simply race, and the loser aborts.
+
+- The commitment's id **is the id of the proposal that created it**, so the milestone proposal can be
+  drafted as soon as the funding proposal exists — no event to scrape in between.
+- Entries are separated by `,`, not `;` — a semicolon would end the meta pair.
+- A commitment can be settled **once**: release-after-release, release-after-cancel and the reverse are
+  all rejected.
+- `release_commitment`/`cancel_commitment` only work on a commitment belonging to the **same project**.
+- A proposal may not settle the commitment it created itself — that would collapse the two votes back
+  into one payout.
+- Beneficiaries hold a payout lock for as long as the commitment is pending, so they cannot leave or be
+  kicked while money is earmarked for them.
+- Max 50 entries per commitment.
 
 **Caller identity — read this before integrating.** Authorization uses `msg.sender`
 (the original transaction signer), not the immediate caller. This is deliberate: it lets
@@ -245,7 +282,7 @@ interact with contracts you trust.
 - On a tie between options the higher index wins; for the default `[no, yes]` ballot that means a tie approves.
 - `proposal_tally` produces `passed`, `closed` (polls) or `failed` — never `cancelled`.
 
-Only `toggle_pause` proposals may be created and executed while the project is paused, ensuring the DAO can unfreeze itself even if the owner disappears.
+Only `toggle_pause` proposals may be created and executed while the project is paused, ensuring the DAO can unfreeze itself even if the owner disappears. Commitment actions all move funds and are therefore blocked while paused, including a commitment approved before the freeze.
 
 ---
 
@@ -359,6 +396,7 @@ The contract logs concise events for indexing:
 | `pr` (`pr\|pId:<project>\|prId:<proposal>\|r:<result>`) | Result note (“meta changed”, “funds transferred”) | `pr\|pId:1\|prId:5\|r:funds transferred` |
 | `pm` (`pm\|pId:<project>\|prId:<proposal>\|f:<field>\|old:<val>\|new:<val>`) | Config/meta diffs per field (threshold, pause, owner, etc.) | `pm\|pId:1\|prId:6\|f:owner\|old:hive:alice\|new:hive:bob` |
 | `v` (`v\|id:<proposal>\|by:<member>\|cs:<choices>\|w:<weight>`) | Vote casted/updated | `v\|id:5\|by:hive:alice\|cs:1\|w:1.000000` |
+| `cm` (`cm\|pId:<project>\|prId:<proposal>\|s:<state>\|entries:<addr:amount:asset;...>`) | Milestone commitment created (`pending`), paid (`released`) or returned (`cancelled`). A commit emits **no** `rf` — the funds stay in the contract, only reserved; the release emits `rf` per entry, like a normal payout | `cm\|pId:1\|prId:7\|s:pending\|entries:hive:bob:4.000000:hive` |
 
 ---
 
@@ -620,6 +658,107 @@ When an ICC executes successfully:
 ```
 pr|pId:1|prId:5|r:ICC executed: contract:dex.swap
 ```
+
+### 10.7 Milestone Commitments (two votes, one payout)
+
+A developer asks the DAO for funding. The community wants to approve the *money* now but only
+hand it over once the work lands. That is two votes on one pot of money, and it needs the pot to
+still be there for the second vote.
+
+**Why a plain payout proposal is not enough.** The treasury balance is checked when a proposal
+**executes**, never when it is approved. Nothing is reserved at approval time. Two proposals that
+each pass for more than the treasury holds simply race — the first to execute wins and the second
+aborts with `insufficient funds`. An approved-but-unpaid payout is a promise the treasury may not
+be able to keep.
+
+`commit_funds` fixes that by moving the money **out of the treasury balance** and into the
+project's *committed* balance. Every spend path in this contract — payout entries, ICC asset
+intents, further commitments — authorises itself against the treasury balance, so from the moment
+a commitment exists nothing else can reach those funds. They stay inside the contract; they are
+simply no longer spendable.
+
+#### Lifecycle
+
+```mermaid
+graph LR
+    P1[Proposal A<br/>commit_funds] -->|passes| R[Funds reserved<br/>out of treasury]
+    R -->|Proposal B<br/>release_commitment| Paid[Paid to beneficiaries]
+    R -->|Proposal B<br/>cancel_commitment| Back[Returned to treasury]
+
+    style P1 fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+    style R fill:#ede7f6,stroke:#673ab7,stroke-width:3px
+    style Paid fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style Back fill:#fff4e1,stroke:#ff9900,stroke-width:2px
+```
+
+#### Worked example
+
+Bob asks project `1` for 500 HBD to ship a feature. The DAO agrees to fund it, but only pays on
+delivery.
+
+**Vote 1 — reserve the funds.** A normal Yes/No proposal whose outcome meta commits them:
+
+```
+1|Fund Bob milestone 1|Ship the export feature|72||0||commit_funds=hive:bob:500.000:hbd|
+```
+
+Say this proposal is created with id **`7`**. Once it passes and executes, 500 HBD leaves the
+treasury balance and sits in the committed balance. Bob has been paid nothing. No other proposal
+can spend those 500 HBD.
+
+**Vote 2 — the milestone landed.** Reference the *funding proposal's* id:
+
+```
+1|Milestone 1 delivered|Bob shipped it, release the funds|48||0||release_commitment=7|
+```
+
+When this passes, Bob is paid 500 HBD and the commitment is marked `released`.
+
+**Or — the milestone was missed:**
+
+```
+1|Milestone 1 missed|Return the funds to the treasury|48||0||cancel_commitment=7|
+```
+
+The 500 HBD goes back into the spendable treasury and the commitment is marked `cancelled`.
+
+#### The commitment id
+
+**A commitment is identified by the id of the proposal that created it.** There is no separate
+counter and no id to look up: `proposal_create` returns the id, so the milestone proposal can be
+drafted the moment the funding proposal exists — before it has even been voted on.
+
+#### Format notes
+
+- Entries are separated by **`,`**, not `;` — a semicolon ends the meta pair and would silently
+  truncate the commitment.
+- Each entry is `addr:amount:asset`, the same grammar as a payout entry (they share one parser).
+- Multiple beneficiaries and multiple assets in one commitment are fine:
+  `commit_funds=hive:bob:500.000:hbd,hive:carol:200.000:hbd,hive:bob:10.000:hive`
+- Max 50 entries per commitment.
+
+#### Rules enforced
+
+| Rule | Behaviour |
+|------|-----------|
+| Settle once | A commitment can be released **or** cancelled, once. Release-after-release, release-after-cancel and cancel-after-release are all rejected. |
+| Same project | `release_commitment` / `cancel_commitment` only work on a commitment belonging to the project whose members voted. Commitment ids come from the global proposal counter, so without this a throwaway one-member DAO could vote to release another DAO's funds. |
+| No self-settlement | One proposal may not both create a commitment and settle it. Meta keys execute in sorted order, so `commit_funds` would run before `release_commitment` and collapse the two votes back into a single payout. |
+| All or nothing | If any entry in a multi-entry commitment cannot be covered by the treasury, the whole action aborts and nothing is reserved. |
+| Validated at creation | A malformed commitment is rejected when the proposal is **created**, not when it executes — otherwise the DAO could approve something it can never enact. |
+| Beneficiaries are held | A pending commitment takes a payout lock on each beneficiary, so they cannot leave or be kicked while money is earmarked for them. Released on settlement. |
+| Blocked while paused | All three actions move funds, so none of them execute while the project is paused — including a commitment approved before the freeze. |
+
+#### Events
+
+```
+cm|pId:1|prId:7|s:pending|entries:hive:bob:500.000000:hbd
+cm|pId:1|prId:7|s:released|entries:hive:bob:500.000000:hbd
+```
+
+A **commit emits no `rf`** — the funds have not left the DAO, only been reserved — so treasury
+views that subtract `rf` do not double-count. A **release emits one `rf` per entry**, exactly like
+a direct payout, because that is when the money actually leaves.
 
 ---
 

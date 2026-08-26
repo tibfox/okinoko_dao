@@ -417,6 +417,18 @@ func parseMetadataField(val string) map[string]string {
 				sdk.Abort(fmt.Sprintf("membership NFT contract not found: %s", value))
 			}
 		}
+		// Validate the commitment actions' grammar HERE, at creation, not at
+		// execute. Voters are shown the proposal before they vote on it, and a
+		// commitment that only fails to parse days later — after it has already
+		// passed — is a proposal the DAO approved and can never enact. The
+		// execute-time handlers below re-derive the same values from these
+		// strings, so anything that parses here parses there.
+		switch key {
+		case "commit_funds":
+			parseCommitmentField(value)
+		case "release_commitment", "cancel_commitment":
+			parseCommitmentTarget(value, key)
+		}
 		meta[key] = value
 	}
 	return meta
@@ -431,7 +443,8 @@ func isKnownMetaKey(key string) bool {
 		"update_membershipNFTContractFunction", "update_membershipNFTPayload",
 		"update_proposalCreatorRestriction", "update_url", "update_owner",
 		"remove_owner", "toggle_pause", "update_whitelistOnly",
-		"whitelist_add", "whitelist_remove", "kick_member":
+		"whitelist_add", "whitelist_remove", "kick_member",
+		"commit_funds", "release_commitment", "cancel_commitment":
 		return true
 	}
 	return false
@@ -515,42 +528,87 @@ func parsePayoutField(val string) []PayoutEntry {
 		if entry == "" {
 			continue
 		}
-
-		// Split by colons to detect format
-		parts := strings.Split(entry, ":")
-		if len(parts) < 3 {
-			sdk.Abort("invalid payout entry format (need addr:amount:asset)")
-		}
-
-		// Format: protocol:address:amount:asset
-		var addr sdk.Address
-		var amount Amount
-		var asset sdk.Asset
-
-		// Last part must be asset, second-to-last must be amount
-		lastPart := parts[len(parts)-1]
-		secondLastPart := parts[len(parts)-2]
-
-		// Check if last part is an asset (non-numeric)
-		if _, err := strconv.ParseFloat(lastPart, 64); err == nil {
-			sdk.Abort("payout entry missing asset (format: addr:amount:asset)")
-		}
-
-		assetStr := strings.ToLower(lastPart)
-		if !isValidAsset(assetStr) {
-			sdk.Abort(fmt.Sprintf("payout asset %s is not supported", assetStr))
-		}
-		asset = AssetFromString(assetStr)
-		amount = FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
-		if amount <= 0 {
-			sdk.Abort("payout amount must be positive")
-		}
-		addr = AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
-		validateAddress(addr)
-
-		payouts = append(payouts, PayoutEntry{Address: addr, Amount: amount, Asset: asset})
+		payouts = append(payouts, parsePayoutEntry(entry))
 	}
 	return payouts
+}
+
+// parsePayoutEntry parses one `addr:amount:asset` triple.
+//
+// Shared by parsePayoutField and parseCommitmentField so a commitment and a
+// direct payout can never diverge on what a beneficiary line means — the
+// commitment is paid out through the same transfer path once its milestone vote
+// passes, so anything this accepts must be payable then.
+func parsePayoutEntry(entry string) PayoutEntry {
+	// Split by colons to detect format
+	parts := strings.Split(entry, ":")
+	if len(parts) < 3 {
+		sdk.Abort("invalid payout entry format (need addr:amount:asset)")
+	}
+
+	// Format: protocol:address:amount:asset
+	// Last part must be asset, second-to-last must be amount
+	lastPart := parts[len(parts)-1]
+	secondLastPart := parts[len(parts)-2]
+
+	// Check if last part is an asset (non-numeric)
+	if _, err := strconv.ParseFloat(lastPart, 64); err == nil {
+		sdk.Abort("payout entry missing asset (format: addr:amount:asset)")
+	}
+
+	assetStr := strings.ToLower(lastPart)
+	if !isValidAsset(assetStr) {
+		sdk.Abort(fmt.Sprintf("payout asset %s is not supported", assetStr))
+	}
+	asset := AssetFromString(assetStr)
+	amount := FloatToAmount(mustParseFloat(secondLastPart, "invalid payout amount"))
+	if amount <= 0 {
+		sdk.Abort("payout amount must be positive")
+	}
+	addr := AddressFromString(strings.Join(parts[:len(parts)-2], ":"))
+	validateAddress(addr)
+
+	return PayoutEntry{Address: addr, Amount: amount, Asset: asset}
+}
+
+// parseCommitmentField parses the `commit_funds` meta value: a COMMA-separated
+// list of addr:amount:asset entries.
+//
+// The separator is ',' and not the ';' parsePayoutField uses because this list
+// lives inside a meta VALUE, and ';' already separates one meta pair from the
+// next — a semicolon here would silently truncate the commitment and leave the
+// remainder to be rejected as an unknown meta action.
+func parseCommitmentField(val string) []PayoutEntry {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		sdk.Abort("commit_funds requires at least one addr:amount:asset entry")
+	}
+	rawEntries := strings.Split(val, ",")
+	if len(rawEntries) > MaxCommitmentEntries {
+		sdk.Abort(fmt.Sprintf("commit_funds cannot exceed %d entries", MaxCommitmentEntries))
+	}
+	entries := make([]PayoutEntry, 0, len(rawEntries))
+	for _, entry := range rawEntries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		entries = append(entries, parsePayoutEntry(entry))
+	}
+	if len(entries) == 0 {
+		sdk.Abort("commit_funds requires at least one addr:amount:asset entry")
+	}
+	return entries
+}
+
+// parseCommitmentTarget parses the proposal id a release_commitment or
+// cancel_commitment action refers to.
+func parseCommitmentTarget(val string, action string) uint64 {
+	id, err := strconv.ParseUint(strings.TrimSpace(val), 10, 64)
+	if err != nil {
+		sdk.Abort(fmt.Sprintf("%s requires the id of the proposal that committed the funds", action))
+	}
+	return id
 }
 
 // mustParseFloat parses a float or aborts with the given message.
